@@ -1,0 +1,14 @@
+{
+  "name": "brozicodes-claude",
+  "owner": {
+    "name": "Andrei Brozi",
+    "url": "https://brozi.codes"
+  },
+  "plugins": [
+    {
+      "name": "brozicodes-claude",
+      "source": ".",
+      "description": "Macro-tools for Claude Code. Cut token costs by replacing micro-tool loops with batch operations."
+    }
+  ]
+}
