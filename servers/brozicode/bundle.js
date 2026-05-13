@@ -35580,7 +35580,7 @@ var EMPTY_COMPLETION_RESULT = {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
-import process from "node:process";
+import process2 from "node:process";
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
 var ReadBuffer = class {
@@ -35612,7 +35612,7 @@ function serializeMessage(message) {
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 var StdioServerTransport = class {
-  constructor(_stdin = process.stdin, _stdout = process.stdout) {
+  constructor(_stdin = process2.stdin, _stdout = process2.stdout) {
     this._stdin = _stdin;
     this._stdout = _stdout;
     this._readBuffer = new ReadBuffer();
@@ -36863,12 +36863,13 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
 }
 function findNearestMatch(fileContent, oldContent) {
   const targetLine = oldContent.trim().split("\n")[0].trim();
-  const fileLines = fileContent.split("\n");
+  const fileLines = fileContent.split("\n").slice(0, 200);
   let bestScore = Infinity;
   let bestLine = null;
   let bestLineNum = 0;
+  const cappedTarget = targetLine.slice(0, 200);
   fileLines.forEach((line, i) => {
-    const score = levenshteinDistance(line.trim(), targetLine);
+    const score = levenshteinDistance(line.trim().slice(0, 200), cappedTarget);
     if (score < bestScore) {
       bestScore = score;
       bestLine = line;
@@ -36904,8 +36905,7 @@ Suggestion: update oldContent to match the actual file content.`;
 }
 async function findProjectRoot(filePath) {
   let dir = path.dirname(path.resolve(filePath));
-  const root = path.dirname(dir);
-  while (dir !== root) {
+  while (true) {
     for (const marker of ["tsconfig.json", "package.json"]) {
       try {
         await fs.access(path.join(dir, marker));
@@ -36913,7 +36913,9 @@ async function findProjectRoot(filePath) {
       } catch {
       }
     }
-    dir = path.dirname(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   return path.dirname(path.resolve(filePath));
 }
@@ -36995,9 +36997,10 @@ ${validationResult.output}`;
   return text.trim();
 }
 async function handler({ edits, validate, stopOnFirstError }) {
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const fileEdits = /* @__PURE__ */ new Map();
   for (const edit of edits) {
-    const resolved = path.resolve(edit.file);
+    const resolved = path.isAbsolute(edit.file) ? edit.file : path.resolve(projectDir, edit.file);
     if (!fileEdits.has(resolved)) fileEdits.set(resolved, []);
     fileEdits.get(resolved).push({ ...edit, resolvedPath: resolved });
   }
@@ -37043,7 +37046,9 @@ ${err.message}`
   }
   const failures = results.filter((r) => !r.success);
   if (failures.length === 0 || !stopOnFirstError) {
-    const filesToWrite = stopOnFirstError ? [...modified.keys()] : [...new Set(results.filter((r) => r.success).map((r) => path.resolve(r.file)))];
+    const filesToWrite = stopOnFirstError ? [...modified.keys()] : [...new Set(results.filter((r) => r.success).map((r) => {
+      return path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file);
+    }))];
     for (const filePath of filesToWrite) {
       if (modified.get(filePath) !== fileContents.get(filePath)) {
         await fs.writeFile(filePath, modified.get(filePath), "utf8");
@@ -37066,14 +37071,15 @@ function registerBatchEdit(server2) {
     "brozi_batch_edit",
     `Apply multiple file edits in one operation with optional local validation.
 Use instead of sequential Read\u2192Edit\u2192Verify calls when editing 2+ files.
-Whitespace differences in oldContent are tolerated automatically.`,
+Whitespace differences in oldContent are tolerated automatically.
+Always use absolute paths or paths relative to the project root.`,
     {
       edits: external_exports.array(external_exports.object({
-        file: external_exports.string().describe("Absolute or relative path to the file"),
+        file: external_exports.string().describe("Absolute path to the file. Use CLAUDE_PROJECT_DIR as base for relative paths."),
         oldContent: external_exports.string().describe("The exact block of text to find and replace"),
         newContent: external_exports.string().describe("The replacement text")
       })).min(1).describe("Array of edits to apply"),
-      validate: external_exports.enum(["none", "tsc", "eslint", "both"]).default("none").describe("Run local validation after edits"),
+      validate: external_exports.enum(["none", "tsc", "eslint", "both"]).default("none").describe("Run local validation after edits. Default none \u2014 only use when explicitly needed."),
       stopOnFirstError: external_exports.boolean().default(true).describe("Abort all edits if one fails")
     },
     handler

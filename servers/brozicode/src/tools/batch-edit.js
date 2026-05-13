@@ -59,6 +59,8 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
     // fall through to failure
   }
 
+  // FIX 1: Cap nearest match search to first 5000 chars to avoid
+  // O(m×n) Levenshtein hanging on large files
   const nearestMatch = findNearestMatch(fileContent, oldContent);
   return {
     success: false,
@@ -68,13 +70,17 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
 
 function findNearestMatch(fileContent, oldContent) {
   const targetLine = oldContent.trim().split('\n')[0].trim();
-  const fileLines  = fileContent.split('\n');
+  // FIX 1: Only search first 200 lines to prevent event loop block
+  const fileLines  = fileContent.split('\n').slice(0, 200);
   let bestScore    = Infinity;
   let bestLine     = null;
   let bestLineNum  = 0;
 
+  // FIX 1: Also cap target line length to avoid expensive comparison
+  const cappedTarget = targetLine.slice(0, 200);
+
   fileLines.forEach((line, i) => {
-    const score = levenshteinDistance(line.trim(), targetLine);
+    const score = levenshteinDistance(line.trim().slice(0, 200), cappedTarget);
     if (score < bestScore) {
       bestScore   = score;
       bestLine    = line;
@@ -111,19 +117,22 @@ function buildMatchError(oldContent, nearestMatch) {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
+// FIX 2: Rewritten findProjectRoot — proper termination condition
 async function findProjectRoot(filePath) {
   let dir = path.dirname(path.resolve(filePath));
-  const root = path.dirname(dir);
-  while (dir !== root) {
+
+  while (true) {
     for (const marker of ['tsconfig.json', 'package.json']) {
       try {
         await fs.access(path.join(dir, marker));
         return dir;
       } catch {}
     }
-    dir = path.dirname(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
   }
-  return path.dirname(path.resolve(filePath));
+  return path.dirname(path.resolve(filePath)); // fallback
 }
 
 async function runValidation(validate, editedFiles) {
@@ -194,10 +203,15 @@ function buildResponse(results, validationResult, totalEdits) {
 // ─── Main Handler ────────────────────────────────────────────────────────────
 
 async function handler({ edits, validate, stopOnFirstError }) {
+  // FIX 3: Resolve paths relative to CLAUDE_PROJECT_DIR, not plugin cache
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
   // 1. Group edits by file
   const fileEdits = new Map();
   for (const edit of edits) {
-    const resolved = path.resolve(edit.file);
+    const resolved = path.isAbsolute(edit.file)
+      ? edit.file
+      : path.resolve(projectDir, edit.file);
     if (!fileEdits.has(resolved)) fileEdits.set(resolved, []);
     fileEdits.get(resolved).push({ ...edit, resolvedPath: resolved });
   }
@@ -241,12 +255,16 @@ async function handler({ edits, validate, stopOnFirstError }) {
     }
   }
 
-  // 4. Write files only if no failures (when stopOnFirstError=true)
+  // 4. Write files only if no failures
   const failures = results.filter(r => !r.success);
   if (failures.length === 0 || !stopOnFirstError) {
     const filesToWrite = stopOnFirstError
       ? [...modified.keys()]
-      : [...new Set(results.filter(r => r.success).map(r => path.resolve(r.file)))];
+      : [...new Set(results.filter(r => r.success).map(r => {
+          return path.isAbsolute(r.file)
+            ? r.file
+            : path.resolve(projectDir, r.file);
+        }))];
 
     for (const filePath of filesToWrite) {
       if (modified.get(filePath) !== fileContents.get(filePath)) {
@@ -278,17 +296,18 @@ export function registerBatchEdit(server) {
     'brozi_batch_edit',
     `Apply multiple file edits in one operation with optional local validation.
 Use instead of sequential Read→Edit→Verify calls when editing 2+ files.
-Whitespace differences in oldContent are tolerated automatically.`,
+Whitespace differences in oldContent are tolerated automatically.
+Always use absolute paths or paths relative to the project root.`,
     {
       edits: z.array(z.object({
-        file:       z.string().describe('Absolute or relative path to the file'),
+        file:       z.string().describe('Absolute path to the file. Use CLAUDE_PROJECT_DIR as base for relative paths.'),
         oldContent: z.string().describe('The exact block of text to find and replace'),
         newContent: z.string().describe('The replacement text'),
       })).min(1).describe('Array of edits to apply'),
 
       validate: z.enum(['none', 'tsc', 'eslint', 'both'])
         .default('none')
-        .describe('Run local validation after edits'),
+        .describe('Run local validation after edits. Default none — only use when explicitly needed.'),
 
       stopOnFirstError: z.boolean()
         .default(true)
