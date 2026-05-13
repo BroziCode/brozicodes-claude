@@ -7,7 +7,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const command = process.argv[2]; // 'track' | 'init'
+const command = process.argv[2]; // 'track' | 'init' | 'stop'
 
 // Read hook context from stdin
 let input = '';
@@ -74,6 +74,23 @@ process.stdin.on('end', () => {
     }
 
     saveSavings(savings);
+    process.exit(0);
+  }
+
+  if (command === 'stop') {
+    // Session ending — print a final savings summary to stdout so it appears in the terminal
+    const savings = loadSavings();
+    const calls = savings.batchEditCalls + savings.smartSearchCalls;
+    if (calls > 0) {
+      const tokens = savings.tokensEstimated;
+      const roundtrips = savings.savedRoundtrips;
+      const minutes = Math.round((Date.now() - savings.sessionStart) / 60_000);
+      const dollarEst = (tokens / 1_000_000 * 3.0).toFixed(2); // rough Sonnet rate
+      process.stdout.write(
+        `\n brozicode · session saved: ~$${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips` +
+        `  [${savings.batchEditCalls}× batch-edit, ${savings.smartSearchCalls}× smart-search]\n\n`
+      );
+    }
     process.exit(0);
   }
 

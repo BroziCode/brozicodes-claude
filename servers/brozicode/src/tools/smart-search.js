@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { parse } from '@babel/parser';
 import { promises as fs } from 'fs';
 import path from 'path';
+import fg from 'fast-glob';
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -244,40 +245,265 @@ function buildResponse(filePath, result) {
   return out.trim();
 }
 
-// ─── Handler ─────────────────────────────────────────────────────────────────
+// ─── Glob / line-range helpers ────────────────────────────────────────────────
 
-async function handler({ filePath, includeImports, includeTypes, includePrivate }) {
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const resolved = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(projectDir, filePath);
+/** Parse "src/**\/*.ts#10-40" → { pattern: "src/**\/*.ts", lineStart: 10, lineEnd: 40 } */
+function parseGlobPattern(raw) {
+  const hashIdx = raw.lastIndexOf('#');
+  if (hashIdx === -1) return { pattern: raw, lineStart: null, lineEnd: null };
 
-  let code;
-  try {
-    code = await fs.readFile(resolved, 'utf8');
-  } catch (err) {
-    return {
-      content: [{ type: 'text', text: `✗ Could not read file: ${resolved}\n${err.message}` }],
-      isError: true,
-    };
-  }
-
-  let result;
-  try {
-    result = extractSkeleton(code, resolved, { includeImports, includeTypes, includePrivate });
-  } catch (err) {
-    return {
-      content: [{
-        type: 'text',
-        text: `✗ Failed to parse ${path.basename(resolved)}: ${err.message}\n\nThis file may have syntax errors or use unsupported syntax.`,
-      }],
-      isError: true,
-    };
-  }
+  const rangePart = raw.slice(hashIdx + 1);
+  const match = rangePart.match(/^(\d+)(?:-(\d+))?$/);
+  if (!match) return { pattern: raw, lineStart: null, lineEnd: null };
 
   return {
-    content: [{ type: 'text', text: buildResponse(resolved, result) }],
+    pattern:   raw.slice(0, hashIdx),
+    lineStart: parseInt(match[1], 10),
+    lineEnd:   match[2] ? parseInt(match[2], 10) : parseInt(match[1], 10),
   };
+}
+
+function sliceLines(content, lineStart, lineEnd) {
+  if (lineStart === null) return content;
+  const lines = content.split('\n');
+  const start = Math.max(0, lineStart - 1);
+  const end   = Math.min(lines.length, lineEnd);
+  return lines.slice(start, end).join('\n');
+}
+
+function truncateLine(line, maxLen) {
+  if (maxLen <= 0 || line.length <= maxLen) return line;
+  return line.slice(0, maxLen) + '…';
+}
+
+// ─── Regex match context extraction (grep -A/-B style) ───────────────────────
+
+function extractMatchContext(lines, regex, linesBefore, linesAfter, linesPerFile, maxLineLength) {
+  const matchedLineIdxs = [];
+  let matchCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    regex.lastIndex = 0;
+    if (regex.test(lines[i])) {
+      matchedLineIdxs.push(i);
+      matchCount++;
+      if (linesPerFile > 0 && matchCount >= linesPerFile) break;
+    }
+  }
+
+  if (matchedLineIdxs.length === 0) return null;
+
+  // Build ranges [start, end] (0-indexed, inclusive)
+  const ranges = matchedLineIdxs.map(idx => ({
+    start: Math.max(0, idx - linesBefore),
+    end:   Math.min(lines.length - 1, idx + linesAfter),
+  }));
+
+  // Merge overlapping/adjacent ranges
+  const merged = [];
+  for (const r of ranges) {
+    if (merged.length && r.start <= merged[merged.length - 1].end + 1) {
+      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, r.end);
+    } else {
+      merged.push({ ...r });
+    }
+  }
+
+  const parts = [];
+  for (const { start, end } of merged) {
+    const chunk = lines.slice(start, end + 1).map((line, i) => {
+      const lineNo = String(start + i + 1).padStart(5);
+      return `${lineNo}: ${truncateLine(line, maxLineLength)}`;
+    });
+    parts.push(chunk.join('\n'));
+  }
+
+  return { text: parts.join('\n  ···\n'), matchCount };
+}
+
+// ─── Multi-file handler ───────────────────────────────────────────────────────
+
+async function handler({
+  file_glob_patterns,
+  content_regex,
+  output_mode,
+  summary,
+  if_modified_since,
+  type,
+  file_limit,
+  lines_before,
+  lines_after,
+  lines_per_file,
+  max_line_length,
+  ignore_case,
+  multiline,
+  includeImports,
+  includeTypes,
+  includePrivate,
+}) {
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const sinceMs    = if_modified_since ? new Date(if_modified_since).getTime() : null;
+
+  // Build regex flags
+  let reFlags = 'g';
+  if (ignore_case) reFlags += 'i';
+  if (multiline)   reFlags += 'm';
+  const contentRe = content_regex ? new RegExp(content_regex, reFlags) : null;
+
+  const useContext = contentRe && (lines_before > 0 || lines_after > 0);
+
+  // 1. Expand all glob patterns, collecting per-file line ranges
+  const fileLineRanges = new Map(); // filePath → { lineStart, lineEnd }
+
+  for (const raw of file_glob_patterns) {
+    const { pattern, lineStart, lineEnd } = parseGlobPattern(raw);
+    const isAbsolute = path.isAbsolute(pattern);
+
+    const matches = await fg(pattern, {
+      cwd:      isAbsolute ? '/' : projectDir,
+      absolute: true,
+      dot:      true,
+      ignore:   ['**/node_modules/**', '**/.git/**'],
+    });
+
+    for (const absPath of matches) {
+      // Extension filter
+      if (type) {
+        const ext = path.extname(absPath).slice(1).toLowerCase();
+        if (ext !== type.toLowerCase()) continue;
+      }
+      if (!fileLineRanges.has(absPath) || lineStart !== null) {
+        fileLineRanges.set(absPath, { lineStart, lineEnd });
+      }
+    }
+  }
+
+  if (fileLineRanges.size === 0) {
+    return { content: [{ type: 'text', text: 'No files matched the provided glob patterns.' }] };
+  }
+
+  // 2. Apply if_modified_since filter
+  let filePaths = [...fileLineRanges.keys()];
+  if (sinceMs !== null) {
+    const filtered = [];
+    for (const fp of filePaths) {
+      try {
+        const stat = await fs.stat(fp);
+        if (stat.mtimeMs > sinceMs) filtered.push(fp);
+      } catch { /* skip unreadable */ }
+    }
+    filePaths = filtered;
+  }
+
+  // 3. Apply file_limit
+  if (file_limit > 0 && filePaths.length > file_limit) {
+    filePaths = filePaths.slice(0, file_limit);
+  }
+
+  // 4. For path-only mode we can skip reading
+  if (output_mode === 'file_paths_only') {
+    const text = filePaths.sort().join('\n');
+    return { content: [{ type: 'text', text: text || 'No files matched.' }] };
+  }
+
+  // 5. Read files, apply content_regex filter, build output
+  const sections    = [];
+  const matchCounts = [];
+
+  for (const fp of filePaths.sort()) {
+    let content;
+    try {
+      content = await fs.readFile(fp, 'utf8');
+    } catch {
+      continue;
+    }
+
+    // Content regex filter / match counting
+    let matchCount = 0;
+    if (contentRe) {
+      contentRe.lastIndex = 0;
+      const allMatches = [...content.matchAll(contentRe)];
+      if (allMatches.length === 0) continue;
+      matchCount = allMatches.length;
+    }
+
+    matchCounts.push({ fp, matchCount });
+    if (output_mode === 'file_paths_with_match_count') continue;
+
+    // Apply line range
+    const { lineStart, lineEnd } = fileLineRanges.get(fp);
+    const rangeLabel = lineStart !== null ? `#${lineStart}-${lineEnd}` : '';
+
+    if (summary) {
+      const ext = path.extname(fp).slice(1).toLowerCase();
+      if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+        try {
+          const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          sections.push(`### ${fp}${rangeLabel}\n${buildResponse(fp, skeleton)}`);
+        } catch {
+          const sliced = sliceLines(content, lineStart, lineEnd);
+          sections.push(`### ${fp}${rangeLabel}\n\`\`\`\n${sliced}\n\`\`\``);
+        }
+      } else {
+        const sliced = sliceLines(content, lineStart, lineEnd);
+        sections.push(`### ${fp}${rangeLabel}\n${sliced}`);
+      }
+      continue;
+    }
+
+    // Context mode: grep -A/-B style output
+    if (useContext) {
+      const lines = content.split('\n');
+      const ctx = extractMatchContext(
+        lines,
+        new RegExp(content_regex, reFlags),
+        lines_before,
+        lines_after,
+        lines_per_file,
+        max_line_length,
+      );
+      if (ctx) {
+        sections.push(`### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`);
+      }
+      continue;
+    }
+
+    // Plain content mode
+    let sliced = sliceLines(content, lineStart, lineEnd);
+
+    // Apply max_line_length and lines_per_file to plain output
+    if (max_line_length > 0 || lines_per_file > 0) {
+      let fileLines = sliced.split('\n');
+      if (max_line_length > 0) {
+        fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+      }
+      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+        fileLines = fileLines.slice(0, lines_per_file);
+        fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
+      }
+      sliced = fileLines.join('\n');
+    }
+
+    const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
+    sections.push(`### ${fp}${lineInfo}\n\`\`\`\n${sliced}\n\`\`\``);
+  }
+
+  if (output_mode === 'file_paths_with_match_count') {
+    if (matchCounts.length === 0) {
+      return { content: [{ type: 'text', text: 'No files matched.' }] };
+    }
+    const text = matchCounts
+      .sort((a, b) => b.matchCount - a.matchCount)
+      .map(({ fp, matchCount }) => `${String(matchCount).padStart(5)}  ${fp}`)
+      .join('\n');
+    return { content: [{ type: 'text', text: text }] };
+  }
+
+  if (sections.length === 0) {
+    return { content: [{ type: 'text', text: 'No files matched (after content_regex filtering).' }] };
+  }
+
+  return { content: [{ type: 'text', text: sections.join('\n\n') }] };
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────
@@ -285,15 +511,72 @@ async function handler({ filePath, includeImports, includeTypes, includePrivate 
 export function registerSmartSearch(server) {
   server.tool(
     'brozi_smart_search',
-    `Parse a source file into AST and return only its structural skeleton.
-Strips function bodies, returns signatures, types, exports, and imports.
-Use instead of reading full files when you need structural overview.
-Typical reduction: 2,000 lines → 150 lines.`,
+    `Multi-file search, read, and AST-summary tool. Replaces grep + cat + glob.
+
+Params:
+  file_glob_patterns  – array of glob strings. Append #N-M to read only those lines.
+                        e.g. ["src/**/*.ts", "src/utils.ts#10-40"]
+  content_regex       – only return files whose content matches this regex (grep-style)
+  output_mode         – "file_paths_with_content" (default) | "file_paths_only" | "file_paths_with_match_count"
+  summary             – true → return JS/TS AST skeleton instead of raw content
+  if_modified_since   – ISO timestamp; skip files not modified after this date
+  type                – extension filter: "ts", "js", "sql", etc.
+  file_limit          – max number of files to process (0 = unlimited)
+  lines_before        – context lines before each regex match (like grep -B)
+  lines_after         – context lines after each regex match (like grep -A)
+  lines_per_file      – max matching lines shown per file (0 = unlimited)
+  max_line_length     – truncate lines longer than this (0 = unlimited)
+  ignore_case         – case-insensitive regex matching
+  multiline           – multiline regex flag (^ and $ match line boundaries)
+
+Typical savings: read 20 files in one call instead of 20 sequential Reads.`,
     {
-      filePath: z.string().describe('Path to the JS/TS/JSX/TSX file to parse'),
-      includeImports: z.boolean().default(true).describe('Include import statements'),
-      includeTypes: z.boolean().default(true).describe('Include TS type/interface definitions'),
-      includePrivate: z.boolean().default(false).describe('Include private class members'),
+      file_glob_patterns: z.array(z.string()).min(1)
+        .describe('Glob patterns to match files. Append #N-M to limit to a line range.'),
+
+      content_regex: z.string().optional()
+        .describe('Filter: only include files whose content matches this regex.'),
+
+      output_mode: z.enum(['file_paths_with_content', 'file_paths_only', 'file_paths_with_match_count'])
+        .default('file_paths_with_content')
+        .describe('Controls output verbosity.'),
+
+      summary: z.boolean().default(false)
+        .describe('For JS/TS files: return AST skeleton (signatures, exports) instead of raw source.'),
+
+      if_modified_since: z.string().optional()
+        .describe('ISO 8601 timestamp. Skip files not modified after this date.'),
+
+      type: z.string().optional()
+        .describe('Extension filter (without dot): "ts", "js", "sql", etc.'),
+
+      file_limit: z.number().int().min(0).default(0)
+        .describe('Max files to process. 0 = unlimited.'),
+
+      lines_before: z.number().int().min(0).default(0)
+        .describe('Context lines before each regex match (like grep -B).'),
+
+      lines_after: z.number().int().min(0).default(0)
+        .describe('Context lines after each regex match (like grep -A).'),
+
+      lines_per_file: z.number().int().min(0).default(0)
+        .describe('Max matching lines shown per file. 0 = unlimited.'),
+
+      max_line_length: z.number().int().min(0).default(0)
+        .describe('Truncate lines longer than this. 0 = unlimited.'),
+
+      ignore_case: z.boolean().default(false)
+        .describe('Case-insensitive regex matching.'),
+
+      multiline: z.boolean().default(false)
+        .describe('Multiline flag — ^ and $ match line boundaries.'),
+
+      includeImports: z.boolean().default(true)
+        .describe('(summary mode) Include import statements in skeleton.'),
+      includeTypes: z.boolean().default(true)
+        .describe('(summary mode) Include TS type/interface definitions in skeleton.'),
+      includePrivate: z.boolean().default(false)
+        .describe('(summary mode) Include private class members in skeleton.'),
     },
     handler
   );

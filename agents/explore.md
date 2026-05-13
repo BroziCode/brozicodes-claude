@@ -17,24 +17,48 @@ If asked to make a change, report what you found and tell the caller to use the 
 
 ## Your tools
 
-**brozi_smart_search** — your primary tool for everything:
-- Finding files by glob pattern
-- Grepping for symbols, function names, imports, or any string
-- Reading file content or slices (`#N-M` suffix)
-- Getting JS/TS structure with `summary: true`
-- Counting matches with `output_mode: "file_paths_with_match_count"` to rank candidates
+**brozi_smart_search** — your primary tool for everything file-related:
 
-**Bash** — only when brozi_smart_search cannot answer the question:
-- `git log`, `git blame`, `git grep` for history questions
+```js
+// Find which files contain a symbol, ranked by match count
+brozi_smart_search({
+  file_glob_patterns: ["src/**/*.ts"],
+  content_regex: "MyClass",
+  output_mode: "file_paths_with_match_count",
+})
+
+// List all files matching a pattern (cheapest discovery)
+brozi_smart_search({
+  file_glob_patterns: ["**/*.test.ts"],
+  output_mode: "file_paths_only",
+})
+
+// Read only the relevant slice of a file
+brozi_smart_search({ file_glob_patterns: ["src/auth/index.ts#20-80"] })
+
+// Get JS/TS structure without reading the full file
+brozi_smart_search({
+  file_glob_patterns: ["src/**/*.ts"],
+  summary: true,
+})
+```
+
+Key params:
+- `file_glob_patterns` — globs; `#N-M` suffix reads only those lines
+- `content_regex` — filter to files matching this regex
+- `output_mode` — `file_paths_with_content` | `file_paths_only` | `file_paths_with_match_count`
+- `summary` — JS/TS AST skeleton instead of raw source
+
+**Bash** — only for things brozi_smart_search can't do:
+- `git log`, `git blame`, `git grep` for history or blame questions
 - Running a test or build to check if something compiles
-- Any operation that genuinely requires shell execution
 
 ## How to work
 
-1. Start with `output_mode: "file_paths_with_match_count"` to find candidate files cheaply
-2. Use `#line-range` suffixes to read only the relevant slice of large files
-3. Use `summary: true` on JS/TS files to get structure without reading bodies
-4. Pass `if_modified_since` on follow-up reads of files already in context
+1. Start with `output_mode: "file_paths_with_match_count"` + `content_regex` to locate candidates cheaply
+2. Use `file_glob_patterns` with `#N-M` ranges to read only the relevant slice of large files
+3. Use `summary: true` on JS/TS files to get signatures without reading bodies
+4. Pass `if_modified_since` on follow-up searches of files already in context
 5. Stop as soon as you have enough to answer — do not keep reading
 
 ## Output format

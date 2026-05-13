@@ -203,10 +203,9 @@ function buildResponse(results, validationResult, totalEdits) {
 // ─── Main Handler ────────────────────────────────────────────────────────────
 
 async function handler({ edits, validate, stopOnFirstError }) {
-  // FIX 3: Resolve paths relative to CLAUDE_PROJECT_DIR, not plugin cache
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-  // 1. Group edits by file
+  // 1. Group edits by file, resolving paths
   const fileEdits = new Map();
   for (const edit of edits) {
     const resolved = path.isAbsolute(edit.file)
@@ -216,19 +215,31 @@ async function handler({ edits, validate, stopOnFirstError }) {
     fileEdits.get(resolved).push({ ...edit, resolvedPath: resolved });
   }
 
-  // 2. Load all files into memory
-  const fileContents = new Map();
-  for (const filePath of fileEdits.keys()) {
+  // 2. Load all files into memory (new files and overwrite targets handled gracefully)
+  const fileContents  = new Map();
+  const isNewFile     = new Set(); // resolved paths that don't exist yet
+
+  for (const [filePath, editsForFile] of fileEdits.entries()) {
+    const isCreateOrOverwrite = editsForFile.every(
+      e => (e.oldContent === undefined || e.oldContent === '') && e.overwrite !== false
+    );
+
     try {
       fileContents.set(filePath, await fs.readFile(filePath, 'utf8'));
-    } catch (err) {
-      return {
-        content: [{
-          type: 'text',
-          text: `✗ Could not read file: ${filePath}\n${err.message}`,
-        }],
-        isError: true,
-      };
+    } catch {
+      if (isCreateOrOverwrite) {
+        // New file — start with empty content
+        fileContents.set(filePath, '');
+        isNewFile.add(filePath);
+      } else {
+        return {
+          content: [{
+            type: 'text',
+            text: `✗ Could not read file: ${filePath}\nIf you're creating a new file, omit oldContent entirely.`,
+          }],
+          isError: true,
+        };
+      }
     }
   }
 
@@ -239,7 +250,27 @@ async function handler({ edits, validate, stopOnFirstError }) {
 
   for (const [filePath, editsForFile] of fileEdits.entries()) {
     if (aborted) break;
+
     for (const edit of editsForFile) {
+      const isCreate   = edit.oldContent === undefined || edit.oldContent === '';
+      const isOverwrite = isCreate && (edit.overwrite === true || isNewFile.has(filePath));
+
+      if (isCreate) {
+        if (isOverwrite || isNewFile.has(filePath)) {
+          // Create new file or overwrite entire content
+          modified.set(filePath, edit.newContent);
+          results.push({ success: true, file: edit.file });
+        } else {
+          results.push({
+            success: false,
+            file: edit.file,
+            error: `File already exists. Pass overwrite: true to replace its entire content.`,
+          });
+          if (stopOnFirstError) { aborted = true; break; }
+        }
+        continue;
+      }
+
       const current = modified.get(filePath);
       const { success, result, error } = applyEditToContent(
         current, edit.oldContent, edit.newContent, filePath
@@ -255,19 +286,18 @@ async function handler({ edits, validate, stopOnFirstError }) {
     }
   }
 
-  // 4. Write files only if no failures
+  // 4. Write files only if no failures (or partial writes when stopOnFirstError is false)
   const failures = results.filter(r => !r.success);
   if (failures.length === 0 || !stopOnFirstError) {
     const filesToWrite = stopOnFirstError
       ? [...modified.keys()]
-      : [...new Set(results.filter(r => r.success).map(r => {
-          return path.isAbsolute(r.file)
-            ? r.file
-            : path.resolve(projectDir, r.file);
-        }))];
+      : [...new Set(results.filter(r => r.success).map(r =>
+          path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file)
+        ))];
 
     for (const filePath of filesToWrite) {
-      if (modified.get(filePath) !== fileContents.get(filePath)) {
+      if (modified.get(filePath) !== fileContents.get(filePath) || isNewFile.has(filePath)) {
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, modified.get(filePath), 'utf8');
       }
     }
@@ -301,8 +331,9 @@ Always use absolute paths or paths relative to the project root.`,
     {
       edits: z.array(z.object({
         file:       z.string().describe('Absolute path to the file. Use CLAUDE_PROJECT_DIR as base for relative paths.'),
-        oldContent: z.string().describe('The exact block of text to find and replace'),
-        newContent: z.string().describe('The replacement text'),
+        oldContent: z.string().optional().describe('The exact block of text to find and replace. Omit entirely to create a new file.'),
+        newContent: z.string().describe('The replacement text (or full content for new/overwritten files).'),
+        overwrite:  z.boolean().optional().describe('When true and oldContent is absent, replaces the entire file content.'),
       })).min(1).describe('Array of edits to apply'),
 
       validate: z.enum(['none', 'tsc', 'eslint', 'both'])
