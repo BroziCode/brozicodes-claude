@@ -12,7 +12,7 @@
       "version": "0.1",
       "author": {
         "name": "Andrei Radu"
-      }
+      },
       "description": "Replaces Claude Code micro-tool loops with Macro-tools. Cuts API round-trips from 12 to 2.",
       "homepage": "https://www.brozi.codes"
     }
