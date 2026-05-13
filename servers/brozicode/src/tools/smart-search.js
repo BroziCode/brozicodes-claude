@@ -247,7 +247,10 @@ function buildResponse(filePath, result) {
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 async function handler({ filePath, includeImports, includeTypes, includePrivate }) {
-  const resolved = path.resolve(filePath);
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const resolved = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(projectDir, filePath);
 
   let code;
   try {

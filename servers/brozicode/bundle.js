@@ -37291,7 +37291,8 @@ function buildResponse2(filePath, result) {
   return out.trim();
 }
 async function handler2({ filePath, includeImports, includeTypes, includePrivate }) {
-  const resolved = path2.resolve(filePath);
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const resolved = path2.isAbsolute(filePath) ? filePath : path2.resolve(projectDir, filePath);
   let code;
   try {
     code = await fs2.readFile(resolved, "utf8");
