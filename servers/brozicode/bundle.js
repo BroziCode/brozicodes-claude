@@ -43281,7 +43281,24 @@ ${sliced}
   if (sections.length === 0) {
     return { content: [{ type: "text", text: "No files matched (after content_regex filtering)." }] };
   }
-  return { content: [{ type: "text", text: sections.join("\n\n") }] };
+  const MAX_BYTES = 4e5;
+  let joined = sections.join("\n\n");
+  if (joined.length > MAX_BYTES) {
+    let kept = 0;
+    let size = 0;
+    for (const s of sections) {
+      if (size + s.length > MAX_BYTES) break;
+      size += s.length + 2;
+      kept++;
+    }
+    const dropped = sections.length - kept;
+    const truncated = sections.slice(0, kept).join("\n\n");
+    joined = truncated + `
+
+\u26A0 Response truncated: showed ${kept} of ${sections.length} files (${dropped} dropped, total ~${Math.round(joined.length / 1024)}KB).
+  Narrow your query with file_limit, a tighter glob, or #N-M line ranges.`;
+  }
+  return { content: [{ type: "text", text: joined }] };
 }
 function registerSmartSearch(server2) {
   server2.tool(

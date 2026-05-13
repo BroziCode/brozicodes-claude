@@ -503,7 +503,28 @@ async function handler({
     return { content: [{ type: 'text', text: 'No files matched (after content_regex filtering).' }] };
   }
 
-  return { content: [{ type: 'text', text: sections.join('\n\n') }] };
+  // ─── Response size guard ──────────────────────────────────────────────────
+  // Cap at ~400KB to prevent socket drops on large multi-file reads.
+  // If truncated, tell the agent how many sections were dropped so it can
+  // narrow the query (smaller glob, line ranges, or file_limit).
+  const MAX_BYTES = 400_000;
+  let joined = sections.join('\n\n');
+  if (joined.length > MAX_BYTES) {
+    let kept = 0;
+    let size = 0;
+    for (const s of sections) {
+      if (size + s.length > MAX_BYTES) break;
+      size += s.length + 2; // +2 for '\n\n'
+      kept++;
+    }
+    const dropped = sections.length - kept;
+    const truncated = sections.slice(0, kept).join('\n\n');
+    joined = truncated +
+      `\n\n⚠ Response truncated: showed ${kept} of ${sections.length} files (${dropped} dropped, total ~${Math.round(joined.length / 1024)}KB).` +
+      `\n  Narrow your query with file_limit, a tighter glob, or #N-M line ranges.`;
+  }
+
+  return { content: [{ type: 'text', text: joined }] };
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────
