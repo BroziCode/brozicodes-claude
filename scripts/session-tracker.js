@@ -1,80 +1,82 @@
 #!/usr/bin/env node
-// BroziCode Session Tracker
-// Reads tool usage from STDIN (Claude Code passes hook context as JSON)
-// Writes cumulative session stats to a temp file
-// Displays the savings bar on Stop
+#!/usr/bin/env node
+// BroziCode Session Tracker Hook
+// Called by PostToolUse and SessionStart hooks
+// Writes savings estimates to a temp file keyed by session ID
 
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const STATS_FILE = path.join(os.tmpdir(), 'brozicode-session.json');
-const command = process.argv[2]; // 'track' or 'display'
+const command = process.argv[2]; // 'track' | 'init'
 
-function loadStats() {
-  try {
-    return JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
-  } catch {
-    return { toolCalls: 0, batchCalls: 0, tokensEstimated: 0, savedRoundtrips: 0, sessionStart: Date.now() };
-  }
-}
+// Read hook context from stdin
+let input = '';
+process.stdin.setEncoding('utf8');
 
-function saveStats(stats) {
-  fs.writeFileSync(STATS_FILE, JSON.stringify(stats));
-}
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  let event = {};
+  try { event = JSON.parse(input); } catch { /* ignore */ }
 
-function formatDuration(ms) {
-  const min = Math.floor(ms / 60000);
-  const sec = Math.floor((ms % 60000) / 1000);
-  return min > 0 ? `${min}min` : `${sec}s`;
-}
+  const sessionId = event.session_id || 'default';
+  const SAVINGS_FILE = path.join(os.tmpdir(), `brozicode-session-${sessionId}.json`);
 
-if (command === 'track') {
-  let input = '';
-  process.stdin.on('data', chunk => input += chunk);
-  process.stdin.on('end', () => {
+  function loadSavings() {
     try {
-      const event = JSON.parse(input);
-      const stats = loadStats();
-      stats.toolCalls += 1;
-
-      const toolName = event?.tool_name || '';
-      if (toolName.includes('brozi_batch_edit')) {
-        stats.savedRoundtrips += 5;
-        stats.batchCalls += 1;
-      }
-      if (toolName.includes('brozi_smart_search')) {
-        stats.tokensEstimated += 1800;
-        stats.savedRoundtrips += 1;
-      }
-      if (toolName.includes('brozi_map_dependencies')) {
-        stats.savedRoundtrips += 2;
-        stats.tokensEstimated += 500;
-      }
-
-      saveStats(stats);
-    } catch { /* ignore parse errors */ }
-  });
-}
-
-if (command === 'display') {
-  const stats = loadStats();
-  const elapsed = Date.now() - stats.sessionStart;
-
-  const tokensSaved = stats.tokensEstimated + (stats.savedRoundtrips * 1200);
-  const dollarsSaved = ((tokensSaved / 1_000_000) * 3).toFixed(2);
-  const tokenDisplay = tokensSaved > 1000
-    ? `${(tokensSaved / 1000).toFixed(1)}k tokens`
-    : `${tokensSaved} tokens`;
-
-  if (stats.savedRoundtrips > 0) {
-    console.log(
-      `\n ─────────────────────────────────────── brozicodes-claude ──\n` +
-      ` ❯\n` +
-      ` ─────────────────────────────────────────────────────────────\n` +
-      `   💸 session savings: $${dollarsSaved} · ${tokenDisplay} · ${formatDuration(elapsed)} · ${stats.savedRoundtrips} roundtrips saved\n`
-    );
+      return JSON.parse(fs.readFileSync(SAVINGS_FILE, 'utf8'));
+    } catch {
+      return {
+        savedRoundtrips: 0,
+        tokensEstimated: 0,
+        batchEditCalls: 0,
+        smartSearchCalls: 0,
+        sessionStart: Date.now(),
+      };
+    }
   }
 
-  try { fs.unlinkSync(STATS_FILE); } catch {}
-}
+  function saveSavings(data) {
+    try {
+      fs.writeFileSync(SAVINGS_FILE, JSON.stringify(data), 'utf8');
+    } catch { /* ignore write errors */ }
+  }
+
+  if (command === 'init') {
+    // SessionStart — initialize fresh savings file
+    saveSavings({
+      savedRoundtrips: 0,
+      tokensEstimated: 0,
+      batchEditCalls: 0,
+      smartSearchCalls: 0,
+      sessionStart: Date.now(),
+    });
+    process.exit(0);
+  }
+
+  if (command === 'track') {
+    const toolName = event?.tool_name || event?.tool?.name || '';
+    const savings = loadSavings();
+
+    if (toolName.includes('brozi_batch_edit')) {
+      // Each batch_edit replaces ~6 micro-tool calls on average
+      // Estimate: 2,000 tokens saved per avoided roundtrip × 5 avoided roundtrips
+      savings.savedRoundtrips += 5;
+      savings.tokensEstimated += 10_000;
+      savings.batchEditCalls += 1;
+    }
+
+    if (toolName.includes('brozi_smart_search')) {
+      // Replaces a full file read — estimate 1,800 tokens saved per call
+      // Plus avoids 1 follow-up roundtrip
+      savings.savedRoundtrips += 1;
+      savings.tokensEstimated += 1_800;
+      savings.smartSearchCalls += 1;
+    }
+
+    saveSavings(savings);
+    process.exit(0);
+  }
+
+  process.exit(0);
+});

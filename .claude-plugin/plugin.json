@@ -1,12 +1,41 @@
 {
   "name": "brozicode",
   "description": "Macro-tools for Claude Code. Cut API round-trips from 12 to 2 on complex edits.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Andrei Radu",
     "url": "https://brozi.codes"
   },
   "homepage": "https://brozi.codes",
   "repository": "https://github.com/BroziCode/brozicodes-claude",
-  "license": "MIT"
+  "license": "MIT",
+  "statusLine": {
+    "type": "command",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/savings-status-line.js\""
+  },
+  "agent": "brozicode:brozicode",
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": [
+      "Batching edits",
+      "Slashing roundtrips",
+      "Compressing context",
+      "Mapping the blast radius",
+      "Bypassing the loop",
+      "Bundling the diff",
+      "Flattening the stack",
+      "Skipping the verify step",
+      "Stripping the bodies",
+      "Counting tokens saved",
+      "Outsmarting the loop tax",
+      "Going macro",
+      "One call to rule them all",
+      "Reading the AST",
+      "Fuzzy-matching your mess",
+      "Validating locally",
+      "Not re-reading that file",
+      "Trust the batch",
+      "Doing it in one trip"
+    ]
+  }
 }
