@@ -4,9 +4,9 @@
 // Writes cumulative session stats to a temp file
 // Displays the savings bar on Stop
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const STATS_FILE = path.join(os.tmpdir(), 'brozicode-session.json');
 const command = process.argv[2]; // 'track' or 'display'
