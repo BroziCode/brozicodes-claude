@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-#!/usr/bin/env node
 // BroziCode Session Tracker Hook
 // Called by PostToolUse and SessionStart hooks
 // Writes savings estimates to a temp file keyed by session ID
