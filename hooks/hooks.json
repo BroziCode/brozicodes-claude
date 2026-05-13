@@ -10,6 +10,17 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Read|Grep|Glob)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'BROZICODE: Use brozi_smart_search instead of native Read/Grep/Glob — it discovers, filters, and reads in one call with glob patterns, content regex, line ranges, and caching.'"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": ".*",

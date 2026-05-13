@@ -37341,7 +37341,7 @@ Typical reduction: 2,000 lines \u2192 150 lines.`,
 // src/index.js
 var server = new McpServer({
   name: "brozicode",
-  version: "0.1.0"
+  version: "0.2.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

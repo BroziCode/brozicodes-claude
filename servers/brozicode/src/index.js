@@ -5,7 +5,7 @@ import { registerSmartSearch } from './tools/smart-search.js';
 
 const server = new McpServer({
   name: 'brozicode',
-  version: '0.1.0',
+  version: '0.2.0',
 });
 
 registerBatchEdit(server);

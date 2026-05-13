@@ -1,6 +1,6 @@
 {
   "name": "brozicode-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.js --bundle --platform=node --format=esm --outfile=bundle.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
@@ -10,6 +10,7 @@
     "@babel/parser": "^7.29.3",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "diff": "^7.0.0",
+    "fast-glob": "^3.3.3",
     "zod": "^3.22.0"
   },
   "devDependencies": {
