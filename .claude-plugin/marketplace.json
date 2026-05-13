@@ -1,17 +1,15 @@
 {
-  "name": "brozicodes-claude",
+  "name": "brozicode-marketplace",
   "owner": {
-    "name": "Andrei Radu",
-    "email": "andreiradu010401@gmail.com"
+    "name": "Andrei Brozi",
+    "email": "andrei@brozi.codes"
   },
+  "description": "BroziCode — Macro-tools for Claude Code. Cut token costs by replacing micro-tool loops with batch operations.",
   "plugins": [
     {
-      "name": "brozicodes-claude",
-      "source": {
-        "source": "github",
-        "repo": "BroziCode/brozicodes-claude"
-      },
-      "description": "Macro-tools for Claude Code. Cut token costs by replacing micro-tool loops with batch operations."
+      "name": "brozicode",
+      "source": ".",
+      "description": "Replaces Claude Code micro-tool loops with Macro-tools. Cuts API round-trips from 12 to 2."
     }
   ]
 }

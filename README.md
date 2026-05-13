@@ -12,7 +12,7 @@ Open Claude Code and run:
 
 ```
 /plugin marketplace add broziden/brozicodes-claude
-/plugin install brozicodes-claude@brozicodes-claude
+/plugin install brozicode@brozicode-marketplace
 ```
 
 That's it. The agent calls the tools. You just code.

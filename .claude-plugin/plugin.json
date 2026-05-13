@@ -1,6 +1,6 @@
 {
-  "name": "brozicodes-claude",
-  "description": "Replaces Claude Code micro-tool loops with Macro-tools. Cuts API round-trips from 12 to 2 on complex edits.",
+  "name": "brozicode",
+  "description": "Macro-tools for Claude Code. Cut API round-trips from 12 to 2 on complex edits.",
   "version": "0.1.0",
   "author": {
     "name": "Andrei Brozi",
