@@ -276,6 +276,14 @@ function truncateLine(line, maxLen) {
   return line.slice(0, maxLen) + '…';
 }
 
+function addLineNumbers(content, startLine = 1) {
+  const lines = content.split('\n');
+  const width = String(startLine + lines.length - 1).length;
+  return lines
+    .map((line, i) => `${String(startLine + i).padStart(width)}: ${line}`)
+    .join('\n');
+}
+
 // ─── Regex match context extraction (grep -A/-B style) ───────────────────────
 
 function extractMatchContext(lines, regex, linesBefore, linesAfter, linesPerFile, maxLineLength) {
@@ -407,8 +415,11 @@ async function handler({
   }
 
   // 5. Read files, apply content_regex filter, build output
-  const sections    = [];
-  const matchCounts = [];
+  const sections     = [];
+  const matchCounts  = [];
+  const MAX_RESPONSE_BYTES = 400_000;
+  let responseSize   = 0;
+  const skippedFiles = [];
 
   for (const fp of filePaths.sort()) {
     let content;
@@ -433,26 +444,27 @@ async function handler({
     // Apply line range
     const { lineStart, lineEnd } = fileLineRanges.get(fp);
     const rangeLabel = lineStart !== null ? `#${lineStart}-${lineEnd}` : '';
+    const ext        = path.extname(fp).slice(1).toLowerCase();
+    const isJsTs     = ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext);
+
+    // ── Build the section string ──────────────────────────────────────────
+    let section;
 
     if (summary) {
-      const ext = path.extname(fp).slice(1).toLowerCase();
-      if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+      if (isJsTs) {
         try {
           const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          sections.push(`### ${fp}${rangeLabel}\n${buildResponse(fp, skeleton)}`);
+          section = `### ${fp}${rangeLabel}\n${buildResponse(fp, skeleton)}`;
         } catch {
           const sliced = sliceLines(content, lineStart, lineEnd);
-          sections.push(`### ${fp}${rangeLabel}\n\`\`\`\n${sliced}\n\`\`\``);
+          section = `### ${fp}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
         const sliced = sliceLines(content, lineStart, lineEnd);
-        sections.push(`### ${fp}${rangeLabel}\n${sliced}`);
+        section = `### ${fp}${rangeLabel}\n${sliced}`;
       }
-      continue;
-    }
 
-    // Context mode: grep -A/-B style output
-    if (useContext) {
+    } else if (useContext) {
       const lines = content.split('\n');
       const ctx = extractMatchContext(
         lines,
@@ -462,32 +474,50 @@ async function handler({
         lines_per_file,
         max_line_length,
       );
-      if (ctx) {
-        sections.push(`### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`);
+      if (!ctx) continue; // regex had no matches in this file
+      section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
+
+    } else {
+      // Plain content mode — apply limits then add line numbers
+      let sliced = sliceLines(content, lineStart, lineEnd);
+      if (max_line_length > 0 || lines_per_file > 0) {
+        let fileLines = sliced.split('\n');
+        if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+          fileLines = fileLines.slice(0, lines_per_file);
+          fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
+        }
+        sliced = fileLines.join('\n');
       }
+      const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
+      section = `### ${fp}${lineInfo}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
+    }
+
+    // ── Per-file response size guard ──────────────────────────────────────
+    // Before pushing, check if this section would overflow the 400KB cap.
+    // For JS/TS files in plain mode, try auto-summary first — gives the agent
+    // useful structure instead of a hard skip.
+    if (responseSize + section.length > MAX_RESPONSE_BYTES) {
+      if (isJsTs && !summary) {
+        try {
+          const skeleton  = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          const autoSummary = `### ${fp} ⚡auto-summary\n${buildResponse(fp, skeleton)}`;
+          if (responseSize + autoSummary.length <= MAX_RESPONSE_BYTES) {
+            sections.push(autoSummary);
+            responseSize += autoSummary.length + 2;
+            continue;
+          }
+        } catch {}
+      }
+      skippedFiles.push(path.basename(fp));
       continue;
     }
 
-    // Plain content mode
-    let sliced = sliceLines(content, lineStart, lineEnd);
-
-    // Apply max_line_length and lines_per_file to plain output
-    if (max_line_length > 0 || lines_per_file > 0) {
-      let fileLines = sliced.split('\n');
-      if (max_line_length > 0) {
-        fileLines = fileLines.map(l => truncateLine(l, max_line_length));
-      }
-      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-        fileLines = fileLines.slice(0, lines_per_file);
-        fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
-      }
-      sliced = fileLines.join('\n');
-    }
-
-    const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
-    sections.push(`### ${fp}${lineInfo}\n\`\`\`\n${sliced}\n\`\`\``);
+    sections.push(section);
+    responseSize += section.length + 2;
   }
 
+  // ── match_count mode ─────────────────────────────────────────────────────
   if (output_mode === 'file_paths_with_match_count') {
     if (matchCounts.length === 0) {
       return { content: [{ type: 'text', text: 'No files matched.' }] };
@@ -499,32 +529,18 @@ async function handler({
     return { content: [{ type: 'text', text: text }] };
   }
 
+  if (skippedFiles.length > 0) {
+    sections.push(
+      `⚠ ${skippedFiles.length} file(s) omitted — response exceeded 400KB limit: ${skippedFiles.join(', ')}\n` +
+      `  Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
+    );
+  }
+
   if (sections.length === 0) {
     return { content: [{ type: 'text', text: 'No files matched (after content_regex filtering).' }] };
   }
 
-  // ─── Response size guard ──────────────────────────────────────────────────
-  // Cap at ~400KB to prevent socket drops on large multi-file reads.
-  // If truncated, tell the agent how many sections were dropped so it can
-  // narrow the query (smaller glob, line ranges, or file_limit).
-  const MAX_BYTES = 400_000;
-  let joined = sections.join('\n\n');
-  if (joined.length > MAX_BYTES) {
-    let kept = 0;
-    let size = 0;
-    for (const s of sections) {
-      if (size + s.length > MAX_BYTES) break;
-      size += s.length + 2; // +2 for '\n\n'
-      kept++;
-    }
-    const dropped = sections.length - kept;
-    const truncated = sections.slice(0, kept).join('\n\n');
-    joined = truncated +
-      `\n\n⚠ Response truncated: showed ${kept} of ${sections.length} files (${dropped} dropped, total ~${Math.round(joined.length / 1024)}KB).` +
-      `\n  Narrow your query with file_limit, a tighter glob, or #N-M line ranges.`;
-  }
-
-  return { content: [{ type: 'text', text: joined }] };
+  return { content: [{ type: 'text', text: sections.join('\n\n') }] };
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────

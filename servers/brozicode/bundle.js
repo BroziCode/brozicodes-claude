@@ -43095,6 +43095,11 @@ function truncateLine(line, maxLen) {
   if (maxLen <= 0 || line.length <= maxLen) return line;
   return line.slice(0, maxLen) + "\u2026";
 }
+function addLineNumbers(content, startLine = 1) {
+  const lines = content.split("\n");
+  const width = String(startLine + lines.length - 1).length;
+  return lines.map((line, i) => `${String(startLine + i).padStart(width)}: ${line}`).join("\n");
+}
 function extractMatchContext(lines, regex, linesBefore, linesAfter, linesPerFile, maxLineLength) {
   const matchedLineIdxs = [];
   let matchCount = 0;
@@ -43198,6 +43203,9 @@ async function handler2({
   }
   const sections = [];
   const matchCounts = [];
+  const MAX_RESPONSE_BYTES = 4e5;
+  let responseSize = 0;
+  const skippedFiles = [];
   for (const fp of filePaths.sort()) {
     let content;
     try {
@@ -43216,28 +43224,26 @@ async function handler2({
     if (output_mode === "file_paths_with_match_count") continue;
     const { lineStart, lineEnd } = fileLineRanges.get(fp);
     const rangeLabel = lineStart !== null ? `#${lineStart}-${lineEnd}` : "";
+    const ext = path2.extname(fp).slice(1).toLowerCase();
+    const isJsTs = ["js", "ts", "jsx", "tsx", "mjs", "cjs"].includes(ext);
+    let section;
     if (summary) {
-      const ext = path2.extname(fp).slice(1).toLowerCase();
-      if (["js", "ts", "jsx", "tsx", "mjs", "cjs"].includes(ext)) {
+      if (isJsTs) {
         try {
           const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          sections.push(`### ${fp}${rangeLabel}
-${buildResponse2(fp, skeleton)}`);
+          section = `### ${fp}${rangeLabel}
+${buildResponse2(fp, skeleton)}`;
         } catch {
-          const sliced2 = sliceLines(content, lineStart, lineEnd);
-          sections.push(`### ${fp}${rangeLabel}
-\`\`\`
-${sliced2}
-\`\`\``);
+          const sliced = sliceLines(content, lineStart, lineEnd);
+          section = `### ${fp}${rangeLabel}
+${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
-        const sliced2 = sliceLines(content, lineStart, lineEnd);
-        sections.push(`### ${fp}${rangeLabel}
-${sliced2}`);
+        const sliced = sliceLines(content, lineStart, lineEnd);
+        section = `### ${fp}${rangeLabel}
+${sliced}`;
       }
-      continue;
-    }
-    if (useContext) {
+    } else if (useContext) {
       const lines = content.split("\n");
       const ctx = extractMatchContext(
         lines,
@@ -43247,29 +43253,43 @@ ${sliced2}`);
         lines_per_file,
         max_line_length
       );
-      if (ctx) {
-        sections.push(`### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
-${ctx.text}`);
+      if (!ctx) continue;
+      section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
+${ctx.text}`;
+    } else {
+      let sliced = sliceLines(content, lineStart, lineEnd);
+      if (max_line_length > 0 || lines_per_file > 0) {
+        let fileLines = sliced.split("\n");
+        if (max_line_length > 0) fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
+        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+          fileLines = fileLines.slice(0, lines_per_file);
+          fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
+        }
+        sliced = fileLines.join("\n");
       }
+      const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
+      section = `### ${fp}${lineInfo}
+${addLineNumbers(sliced, lineStart ?? 1)}`;
+    }
+    if (responseSize + section.length > MAX_RESPONSE_BYTES) {
+      if (isJsTs && !summary) {
+        try {
+          const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          const autoSummary = `### ${fp} \u26A1auto-summary
+${buildResponse2(fp, skeleton)}`;
+          if (responseSize + autoSummary.length <= MAX_RESPONSE_BYTES) {
+            sections.push(autoSummary);
+            responseSize += autoSummary.length + 2;
+            continue;
+          }
+        } catch {
+        }
+      }
+      skippedFiles.push(path2.basename(fp));
       continue;
     }
-    let sliced = sliceLines(content, lineStart, lineEnd);
-    if (max_line_length > 0 || lines_per_file > 0) {
-      let fileLines = sliced.split("\n");
-      if (max_line_length > 0) {
-        fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
-      }
-      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-        fileLines = fileLines.slice(0, lines_per_file);
-        fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
-      }
-      sliced = fileLines.join("\n");
-    }
-    const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
-    sections.push(`### ${fp}${lineInfo}
-\`\`\`
-${sliced}
-\`\`\``);
+    sections.push(section);
+    responseSize += section.length + 2;
   }
   if (output_mode === "file_paths_with_match_count") {
     if (matchCounts.length === 0) {
@@ -43278,27 +43298,16 @@ ${sliced}
     const text = matchCounts.sort((a, b) => b.matchCount - a.matchCount).map(({ fp, matchCount }) => `${String(matchCount).padStart(5)}  ${fp}`).join("\n");
     return { content: [{ type: "text", text }] };
   }
+  if (skippedFiles.length > 0) {
+    sections.push(
+      `\u26A0 ${skippedFiles.length} file(s) omitted \u2014 response exceeded 400KB limit: ${skippedFiles.join(", ")}
+  Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
+    );
+  }
   if (sections.length === 0) {
     return { content: [{ type: "text", text: "No files matched (after content_regex filtering)." }] };
   }
-  const MAX_BYTES = 4e5;
-  let joined = sections.join("\n\n");
-  if (joined.length > MAX_BYTES) {
-    let kept = 0;
-    let size = 0;
-    for (const s of sections) {
-      if (size + s.length > MAX_BYTES) break;
-      size += s.length + 2;
-      kept++;
-    }
-    const dropped = sections.length - kept;
-    const truncated = sections.slice(0, kept).join("\n\n");
-    joined = truncated + `
-
-\u26A0 Response truncated: showed ${kept} of ${sections.length} files (${dropped} dropped, total ~${Math.round(joined.length / 1024)}KB).
-  Narrow your query with file_limit, a tighter glob, or #N-M line ranges.`;
-  }
-  return { content: [{ type: "text", text: joined }] };
+  return { content: [{ type: "text", text: sections.join("\n\n") }] };
 }
 function registerSmartSearch(server2) {
   server2.tool(
@@ -43345,9 +43354,20 @@ Typical savings: read 20 files in one call instead of 20 sequential Reads.`,
 }
 
 // src/index.js
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[brozicode] uncaughtException: ${err?.message}
+${err?.stack ?? ""}
+`);
+});
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? `${reason.message}
+${reason.stack}` : String(reason);
+  process.stderr.write(`[brozicode] unhandledRejection: ${msg}
+`);
+});
 var server = new McpServer({
   name: "brozicode",
-  version: "0.2.0"
+  version: "0.3.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

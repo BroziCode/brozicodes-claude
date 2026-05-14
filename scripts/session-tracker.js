@@ -41,6 +41,9 @@ process.stdin.on('end', () => {
     } catch { /* ignore write errors */ }
   }
 
+  // Tools that indicate the agent fell back to native ops despite brozi hooks
+  const NATIVE_FALLBACK_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'Grep', 'Glob', 'NotebookEdit']);
+
   if (command === 'init') {
     // SessionStart — initialize fresh savings file
     saveSavings({
@@ -48,6 +51,7 @@ process.stdin.on('end', () => {
       tokensEstimated: 0,
       batchEditCalls: 0,
       smartSearchCalls: 0,
+      nativeFallbacks: 0,
       sessionStart: Date.now(),
     });
     process.exit(0);
@@ -63,14 +67,15 @@ process.stdin.on('end', () => {
       savings.savedRoundtrips += 5;
       savings.tokensEstimated += 10_000;
       savings.batchEditCalls += 1;
-    }
-
-    if (toolName.includes('brozi_smart_search')) {
+    } else if (toolName.includes('brozi_smart_search')) {
       // Replaces a full file read — estimate 1,800 tokens saved per call
       // Plus avoids 1 follow-up roundtrip
       savings.savedRoundtrips += 1;
       savings.tokensEstimated += 1_800;
       savings.smartSearchCalls += 1;
+    } else if (NATIVE_FALLBACK_TOOLS.has(toolName)) {
+      // Agent used a native tool despite brozi hooks — track compliance
+      savings.nativeFallbacks = (savings.nativeFallbacks || 0) + 1;
     }
 
     saveSavings(savings);
@@ -82,14 +87,18 @@ process.stdin.on('end', () => {
     const savings = loadSavings();
     const calls = savings.batchEditCalls + savings.smartSearchCalls;
     if (calls > 0) {
-      const tokens = savings.tokensEstimated;
+      const tokens     = savings.tokensEstimated;
       const roundtrips = savings.savedRoundtrips;
-      const minutes = Math.round((Date.now() - savings.sessionStart) / 60_000);
-      const dollarEst = (tokens / 1_000_000 * 3.0).toFixed(2); // rough Sonnet rate
-      process.stdout.write(
-        `\n brozicode · session saved: ~$${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips` +
-        `  [${savings.batchEditCalls}× batch-edit, ${savings.smartSearchCalls}× smart-search]\n\n`
-      );
+      const dollarEst  = (tokens / 1_000_000 * 3.0).toFixed(2); // rough Sonnet rate
+      const fallbacks  = savings.nativeFallbacks || 0;
+      const compliance = calls + fallbacks > 0
+        ? Math.round((calls / (calls + fallbacks)) * 100)
+        : 100;
+
+      let line = `\n brozicode · session saved: ~$${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips`;
+      line    += `  [${savings.batchEditCalls}× batch-edit, ${savings.smartSearchCalls}× smart-search]`;
+      if (fallbacks > 0) line += `  ⚠ ${fallbacks} native fallback${fallbacks !== 1 ? 's' : ''} (${compliance}% compliance)`;
+      process.stdout.write(line + '\n\n');
     }
     process.exit(0);
   }
