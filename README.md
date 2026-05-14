@@ -54,9 +54,46 @@ After each session, BroziCode prints:
  brozicode · 💸 est. savings: $5.58 · 2.9k tokens · 17min · 41 roundtrips saved  [7× batch-edit, 3× smart-search]
 ```
 
+## Using the brozicode agent
+
+After install, your default `claude` session still runs the standard Claude agent.
+The plugin registers `brozicode:brozicode` as a sub-agent. Four ways to use it:
+
+**1. Per-session — CLI flag**
+```bash
+claude --agent brozicode:brozicode
+```
+Every task in that session routes through the brozicode agent.
+
+**2. Global default — `~/.claude/settings.json`**
+```json
+{
+  "defaultAgent": "brozicode:brozicode"
+}
+```
+Every `claude` session on your machine uses brozicode by default.
+
+**3. Per-project — `CLAUDE.md`**
+```markdown
+## File operations
+- NEVER use Read, Edit, Write, Grep, Glob for file work
+- ALWAYS use `brozi_smart_search` to find / read files
+- ALWAYS use `brozi_batch_edit` for all file writes and edits
+- Batch as many edits as possible into a single `brozi_batch_edit` call
+```
+The default agent picks up these rules and behaves like brozicode for that project.
+
+**4. Explicit per-task**
+
+Ask Claude in any session:
+```
+Use the brozicode agent to refactor this module.
+```
+Claude delegates that task to `brozicode:brozicode` without any config change.
+
 ## Version
 
-**v0.2.0**
+**v0.3.0**
 
 ## License
 
