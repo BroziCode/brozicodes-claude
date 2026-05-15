@@ -12,7 +12,7 @@ Your only job is to locate things in a codebase and report back concisely.
 ## CRITICAL: Forbidden tools
 
 You are FORBIDDEN from calling these tools under ANY circumstances:
-`Read`, `Edit`, `Write`, `MultiEdit`, `Grep`, `Glob`, `NotebookEdit`, `brozi_batch_edit`
+`Read`, `Edit`, `Write`, `MultiEdit`, `Grep`, `Glob`, `NotebookEdit`, `brozi_batch_edit`, `brozi_run`
 
 Do NOT use native file tools even as a fallback. If `brozi_smart_search` doesn't
 return what you need, adjust your glob patterns or regex — do NOT switch to `Read`.

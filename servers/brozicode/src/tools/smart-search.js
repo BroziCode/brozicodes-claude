@@ -4,6 +4,11 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import fg from 'fast-glob';
 
+// ─── In-process file cache ────────────────────────────────────────────────────
+// Persists across all tool calls within the same Node.js session (shared module state).
+// Each entry: { mtime: number, content: string, skeletons: Map<optKey, skeletonResult> }
+const fileCache = new Map();
+
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
 function parseFile(code, filePath) {
@@ -242,28 +247,27 @@ function extractSkeleton(code, filePath, options) {
 
 // ─── Response builder ────────────────────────────────────────────────────────
 
-function buildResponse(filePath, result) {
+function buildResponse(filePath, result, projectDir) {
   const { sorted, totalLines, imports, exports } = result;
-  const fileName = path.basename(filePath);
+  const rel     = projectDir ? path.relative(projectDir, filePath) : path.basename(filePath);
+  const display = rel.startsWith('..') ? path.basename(filePath) : rel;
 
-  let out = `📄 ${fileName} — ${totalLines} lines → ${sorted.length} lines extracted\n`;
-  out += '━'.repeat(50) + '\n\n';
+  let out = `# ${display} (${totalLines}→${sorted.length} lines)\n`;
 
   for (const { lineNum, text } of sorted) {
     out += `L${String(lineNum).padEnd(4)} ${text}\n`;
   }
 
   if (exports.length > 0) {
-    out += '\n── Exports ' + '─'.repeat(38) + '\n';
     const unique = [...new Map(exports.map(e => [e.name, e])).values()];
-    unique.forEach(e => { out += `${e.name} (${e.kind})\n`; });
+    out += `\nexports: ${unique.map(e => `${e.name} (${e.kind})`).join(', ')}\n`;
   }
 
   if (imports.length > 0) {
-    out += '\n── Imports ' + '─'.repeat(38) + '\n';
-    imports.forEach(({ source, specifiers }) => {
-      out += `${source.padEnd(30)} →  ${specifiers.join(', ')}\n`;
-    });
+    const importStr = imports
+      .map(({ source, specifiers }) => `${source} → ${specifiers.join(', ')}`)
+      .join(' | ');
+    out += `imports: ${importStr}\n`;
   }
 
   return out.trim();
@@ -356,6 +360,13 @@ function extractMatchContext(lines, regex, linesBefore, linesAfter, linesPerFile
   return { text: parts.join('\n  ···\n'), matchCount };
 }
 
+// ─── Path relativizer ─────────────────────────────────────────────────────────
+
+function relativize(absPath, projectDir) {
+  const rel = path.relative(projectDir, absPath);
+  return rel.startsWith('..') ? absPath : rel;
+}
+
 // ─── Multi-file handler ───────────────────────────────────────────────────────
 
 async function handler({
@@ -419,34 +430,53 @@ async function handler({
     return { content: [{ type: 'text', text: 'No files matched the provided glob patterns.' }] };
   }
 
-  // 2. Apply if_modified_since filter in parallel
-  let filePaths = [...fileLineRanges.keys()];
-  if (sinceMs !== null) {
-    const statResults = await Promise.all(
-      filePaths.map(fp =>
-        fs.stat(fp).then(s => (s.mtimeMs > sinceMs ? fp : null)).catch(() => null)
-      )
-    );
-    filePaths = statResults.filter(Boolean);
-  }
+  // 2. Stat + cache-aware read — combines if_modified_since filter, cache hit detection,
+  //    and disk reads into a single parallel pass.
+  const filePaths = [...fileLineRanges.keys()];
 
-  // 3. Apply file_limit
-  if (file_limit > 0 && filePaths.length > file_limit) {
-    filePaths = filePaths.slice(0, file_limit);
-  }
+  const statReadResults = await Promise.all(
+    filePaths.map(async fp => {
+      try {
+        const stat  = await fs.stat(fp);
+        const mtime = stat.mtimeMs;
 
-  // 4. For path-only mode we can skip reading
-  if (output_mode === 'file_paths_only') {
-    const text = filePaths.sort().join('\n');
-    return { content: [{ type: 'text', text: text || 'No files matched.' }] };
-  }
+        // if_modified_since filter
+        if (sinceMs !== null && mtime <= sinceMs) return null;
 
-  // 5. Read all files in parallel
-  const readResults = await Promise.all(
-    filePaths.sort().map(fp =>
-      fs.readFile(fp, 'utf8').then(content => ({ fp, content })).catch(() => null)
-    )
+        // path-only mode: no content needed
+        if (output_mode === 'file_paths_only') return { fp, content: '', mtime };
+
+        // Cache hit — serve without re-reading disk
+        const cached = fileCache.get(fp);
+        if (cached && cached.mtime === mtime) {
+          return { fp, content: cached.content, mtime };
+        }
+
+        // Cache miss — read from disk and populate cache
+        const content = await fs.readFile(fp, 'utf8');
+        fileCache.set(fp, { mtime, content, skeletons: new Map() });
+        return { fp, content, mtime };
+      } catch {
+        return null;
+      }
+    })
   );
+
+  // 3. Filter nulls and handle path-only output
+  const validEntries = statReadResults.filter(Boolean);
+
+  if (output_mode === 'file_paths_only') {
+    let paths = validEntries.map(e => e.fp).sort();
+    if (file_limit > 0 && paths.length > file_limit) paths = paths.slice(0, file_limit);
+    return { content: [{ type: 'text', text: paths.join('\n') || 'No files matched.' }] };
+  }
+
+  // 4. Apply file_limit and sort for stable output
+  let readResults = validEntries;
+  if (file_limit > 0 && readResults.length > file_limit) {
+    readResults = readResults.slice(0, file_limit);
+  }
+  readResults = readResults.sort((a, b) => (a.fp < b.fp ? -1 : 1));
 
   // 6. Process files, apply content_regex filter, build output
   const sections     = [];
@@ -486,15 +516,24 @@ async function handler({
     if (summary) {
       if (isJsTs) {
         try {
-          const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          section = `### ${fp}${rangeLabel}\n${buildResponse(fp, skeleton)}`;
+          // Use cached skeleton when available (same options key)
+          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+          const cEntry = fileCache.get(fp);
+          let skeleton;
+          if (cEntry?.skeletons?.has(optKey)) {
+            skeleton = cEntry.skeletons.get(optKey);
+          } else {
+            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            cEntry?.skeletons?.set(optKey, skeleton);
+          }
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
         } catch {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
-          section = `### ${fp}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
         const sliced = sliceLines(contentLines, lineStart, lineEnd);
-        section = `### ${fp}${rangeLabel}\n${sliced.join('\n')}`;
+        section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${sliced.join('\n')}`;
       }
 
     } else if (useContext) {
@@ -509,7 +548,7 @@ async function handler({
         max_line_length,
       );
       if (!ctx) continue;
-      section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
+      section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
 
     } else {
       // Plain content mode — slice, apply limits, add line numbers
@@ -520,7 +559,7 @@ async function handler({
         fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
       }
       const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
-      section = `### ${fp}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
+      section = `### ${relativize(fp, projectDir)}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
     }
 
     // ── Per-file response size guard ──────────────────────────────────────
@@ -528,7 +567,7 @@ async function handler({
       if (isJsTs && !summary) {
         try {
           const skeleton    = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          const autoSummary = `### ${fp} ⚡auto-summary\n${buildResponse(fp, skeleton)}`;
+          const autoSummary = `### ${relativize(fp, projectDir)} ⚡auto-summary\n${buildResponse(fp, skeleton, projectDir)}`;
           if (responseSize + autoSummary.length <= MAX_RESPONSE_BYTES) {
             sections.push(autoSummary);
             responseSize += autoSummary.length + 2;

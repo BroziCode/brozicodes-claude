@@ -22,6 +22,7 @@ That's it. The agent calls the tools. You just code.
 |---|---|---|
 | `brozi_batch_edit` | Read→Edit→Verify loop | ~5 round-trips per task |
 | `brozi_smart_search` | Full file reads + grep | 2,000 lines → 150 lines |
+| `brozi_run` | Bash with raw output | 800-line logs → 50 lines |
 
 ### brozi_batch_edit
 
@@ -43,15 +44,37 @@ Combined file discovery, grep, and reading in one call. Supports:
 - `summary: true` for JS/TS AST skeleton (signatures, exports, imports)
 - `#N-M` line-range suffix for targeted reads
 - `if_modified_since` caching — skip unchanged files
+- In-process file cache — zero disk I/O on repeated reads within a session
 - `lines_before` / `lines_after` context around matches
 - `type`, `file_limit`, `max_line_length` controls
+- Compact response headers with relative paths
+
+### brozi_run
+
+Run a shell command and get compressed, ANSI-stripped output. Supports:
+- Automatic truncation to `max_lines` (default: 50)
+- Error/warning line preservation even when truncating (`keep_errors: true`)
+- ANSI escape code stripping (`strip_ansi: true`)
+- Runs in `CLAUDE_PROJECT_DIR`
+
+## Smart hooks
+
+BroziCode installs Claude Code hooks that activate automatically every session:
+
+| Hook | Trigger | Action |
+|---|---|---|
+| SessionStart | session open | init savings tracking + build repo map (`.brozicode/repo-map.md`) |
+| PreToolUse | `Read\|Grep\|Glob` | **hard block** — outputs targeted `brozi_smart_search` alternative |
+| PostToolUse | `Bash\|Read` | rewrite: strip ANSI, truncate (100/200 lines), preserve errors |
+| PreCompact | compaction | snapshot recent files + git diff → `.brozicode/snapshot-{id}.md` |
+| PostCompact | after compaction | re-anchor agent to tool rules + point to snapshot |
 
 ## Session savings display
 
 After each session, BroziCode prints:
 
 ```
- brozicode · 💸 est. savings: $5.58 · 2.9k tokens · 17min · 41 roundtrips saved  [7× batch-edit, 3× smart-search]
+ brozicode · session saved: ~$5.58 · 2.9k tokens · 17 roundtrips  [7× batch-edit, 3× smart-search, 2× run]
 ```
 
 ## Using the brozicode agent
@@ -79,6 +102,7 @@ Every `claude` session on your machine uses brozicode by default.
 - NEVER use Read, Edit, Write, Grep, Glob for file work
 - ALWAYS use `brozi_smart_search` to find / read files
 - ALWAYS use `brozi_batch_edit` for all file writes and edits
+- ALWAYS use `brozi_run` instead of Bash for command output
 - Batch as many edits as possible into a single `brozi_batch_edit` call
 ```
 The default agent picks up these rules and behaves like brozicode for that project.
@@ -93,7 +117,7 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.5.0**
+**v0.6.0**
 
 ## License
 

@@ -25946,8 +25946,8 @@ var require_queue = __commonJS({
         }
         self.drain = noop;
       }
-      function error2(handler3) {
-        errorHandler = handler3;
+      function error2(handler4) {
+        errorHandler = handler4;
       }
     }
     function noop() {
@@ -39024,25 +39024,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler3 of responseHandlers.values()) {
-      handler3(error2);
+    for (const handler4 of responseHandlers.values()) {
+      handler4(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler3 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler3 === void 0) {
+    const handler4 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler4 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler3(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler4(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler3 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler4 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler3 === void 0) {
+    if (handler4 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -39106,7 +39106,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler3(request, fullExtra)).then(async (result) => {
+    }).then(() => handler4(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -39155,8 +39155,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler3 = this._progressHandlers.get(messageId);
-    if (!handler3) {
+    const handler4 = this._progressHandlers.get(messageId);
+    if (!handler4) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -39173,7 +39173,7 @@ var Protocol = class {
         return;
       }
     }
-    handler3(params);
+    handler4(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -39188,8 +39188,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler3 = this._responseHandlers.get(messageId);
-    if (handler3 === void 0) {
+    const handler4 = this._responseHandlers.get(messageId);
+    if (handler4 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -39210,10 +39210,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler3(response);
+      handler4(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler3(error2);
+      handler4(error2);
     }
   }
   get transport() {
@@ -39411,9 +39411,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler3 = this._responseHandlers.get(messageId);
-          if (handler3) {
-            handler3(response);
+          const handler4 = this._responseHandlers.get(messageId);
+          if (handler4) {
+            handler4(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -39550,12 +39550,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler3) {
+  setRequestHandler(requestSchema, handler4) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler3(parsed, extra));
+      return Promise.resolve(handler4(parsed, extra));
     });
   }
   /**
@@ -39577,11 +39577,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler3) {
+  setNotificationHandler(notificationSchema, handler4) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler3(parsed));
+      return Promise.resolve(handler4(parsed));
     });
   }
   /**
@@ -40131,7 +40131,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler3) {
+  setRequestHandler(requestSchema, handler4) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -40159,7 +40159,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler3(request, extra));
+        const result = await Promise.resolve(handler4(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -40177,7 +40177,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler3);
+    return super.setRequestHandler(requestSchema, handler4);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -40528,13 +40528,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler3) {
+  registerToolTask(name, config2, handler4) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler3);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler4);
   }
 };
 
@@ -40721,26 +40721,26 @@ var McpServer = class {
    * Executes a tool handler (either regular or task-based).
    */
   async executeToolHandler(tool, args, extra) {
-    const handler3 = tool.handler;
-    const isTaskHandler = "createTask" in handler3;
+    const handler4 = tool.handler;
+    const isTaskHandler = "createTask" in handler4;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
       if (tool.inputSchema) {
-        const typedHandler = handler3;
+        const typedHandler = handler4;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler3;
+        const typedHandler = handler4;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
     if (tool.inputSchema) {
-      const typedHandler = handler3;
+      const typedHandler = handler4;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler3;
+      const typedHandler = handler4;
       return await Promise.resolve(typedHandler(extra));
     }
   }
@@ -40752,11 +40752,11 @@ var McpServer = class {
       throw new Error("No task store provided for task-capable tool.");
     }
     const args = await this.validateToolInput(tool, request.params.arguments, request.params.name);
-    const handler3 = tool.handler;
+    const handler4 = tool.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler3.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler4.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler3.createTask(taskExtra))
+      await Promise.resolve(handler4.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -41092,7 +41092,7 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema, outputSchema, annotations, execution, _meta, handler3) {
+  _createRegisteredTool(name, title, description, inputSchema, outputSchema, annotations, execution, _meta, handler4) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
@@ -41102,7 +41102,7 @@ var McpServer = class {
       annotations,
       execution,
       _meta,
-      handler: handler3,
+      handler: handler4,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -41505,13 +41505,13 @@ Diff.prototype = {
       editLength++;
     }
     if (callback) {
-      (function exec2() {
+      (function exec3() {
         setTimeout(function() {
           if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
             return callback();
           }
           if (!execEditLength()) {
-            exec2();
+            exec3();
           }
         }, 0);
       })();
@@ -42883,6 +42883,7 @@ var import_parser = __toESM(require_lib(), 1);
 var import_fast_glob = __toESM(require_out4(), 1);
 import { promises as fs2 } from "fs";
 import path2 from "path";
+var fileCache = /* @__PURE__ */ new Map();
 function parseFile(code, filePath) {
   const ext = path2.extname(filePath).slice(1).toLowerCase();
   const plugins = [
@@ -43098,30 +43099,26 @@ function extractSkeleton(code, filePath, options) {
   });
   return { sorted, totalLines, imports, exports };
 }
-function buildResponse2(filePath, result) {
+function buildResponse2(filePath, result, projectDir) {
   const { sorted, totalLines, imports, exports } = result;
-  const fileName = path2.basename(filePath);
-  let out = `\u{1F4C4} ${fileName} \u2014 ${totalLines} lines \u2192 ${sorted.length} lines extracted
+  const rel = projectDir ? path2.relative(projectDir, filePath) : path2.basename(filePath);
+  const display = rel.startsWith("..") ? path2.basename(filePath) : rel;
+  let out = `# ${display} (${totalLines}\u2192${sorted.length} lines)
 `;
-  out += "\u2501".repeat(50) + "\n\n";
   for (const { lineNum, text } of sorted) {
     out += `L${String(lineNum).padEnd(4)} ${text}
 `;
   }
   if (exports.length > 0) {
-    out += "\n\u2500\u2500 Exports " + "\u2500".repeat(38) + "\n";
     const unique = [...new Map(exports.map((e) => [e.name, e])).values()];
-    unique.forEach((e) => {
-      out += `${e.name} (${e.kind})
+    out += `
+exports: ${unique.map((e) => `${e.name} (${e.kind})`).join(", ")}
 `;
-    });
   }
   if (imports.length > 0) {
-    out += "\n\u2500\u2500 Imports " + "\u2500".repeat(38) + "\n";
-    imports.forEach(({ source, specifiers }) => {
-      out += `${source.padEnd(30)} \u2192  ${specifiers.join(", ")}
+    const importStr = imports.map(({ source, specifiers }) => `${source} \u2192 ${specifiers.join(", ")}`).join(" | ");
+    out += `imports: ${importStr}
 `;
-    });
   }
   return out.trim();
 }
@@ -43185,6 +43182,10 @@ function extractMatchContext(lines, regex, linesBefore, linesAfter, linesPerFile
   }
   return { text: parts.join("\n  \xB7\xB7\xB7\n"), matchCount };
 }
+function relativize(absPath, projectDir) {
+  const rel = path2.relative(projectDir, absPath);
+  return rel.startsWith("..") ? absPath : rel;
+}
 async function handler2({
   file_glob_patterns,
   content_regex,
@@ -43238,27 +43239,37 @@ async function handler2({
   if (fileLineRanges.size === 0) {
     return { content: [{ type: "text", text: "No files matched the provided glob patterns." }] };
   }
-  let filePaths = [...fileLineRanges.keys()];
-  if (sinceMs !== null) {
-    const statResults = await Promise.all(
-      filePaths.map(
-        (fp) => fs2.stat(fp).then((s) => s.mtimeMs > sinceMs ? fp : null).catch(() => null)
-      )
-    );
-    filePaths = statResults.filter(Boolean);
-  }
-  if (file_limit > 0 && filePaths.length > file_limit) {
-    filePaths = filePaths.slice(0, file_limit);
-  }
-  if (output_mode === "file_paths_only") {
-    const text = filePaths.sort().join("\n");
-    return { content: [{ type: "text", text: text || "No files matched." }] };
-  }
-  const readResults = await Promise.all(
-    filePaths.sort().map(
-      (fp) => fs2.readFile(fp, "utf8").then((content) => ({ fp, content })).catch(() => null)
-    )
+  const filePaths = [...fileLineRanges.keys()];
+  const statReadResults = await Promise.all(
+    filePaths.map(async (fp) => {
+      try {
+        const stat = await fs2.stat(fp);
+        const mtime = stat.mtimeMs;
+        if (sinceMs !== null && mtime <= sinceMs) return null;
+        if (output_mode === "file_paths_only") return { fp, content: "", mtime };
+        const cached2 = fileCache.get(fp);
+        if (cached2 && cached2.mtime === mtime) {
+          return { fp, content: cached2.content, mtime };
+        }
+        const content = await fs2.readFile(fp, "utf8");
+        fileCache.set(fp, { mtime, content, skeletons: /* @__PURE__ */ new Map() });
+        return { fp, content, mtime };
+      } catch {
+        return null;
+      }
+    })
   );
+  const validEntries = statReadResults.filter(Boolean);
+  if (output_mode === "file_paths_only") {
+    let paths = validEntries.map((e) => e.fp).sort();
+    if (file_limit > 0 && paths.length > file_limit) paths = paths.slice(0, file_limit);
+    return { content: [{ type: "text", text: paths.join("\n") || "No files matched." }] };
+  }
+  let readResults = validEntries;
+  if (file_limit > 0 && readResults.length > file_limit) {
+    readResults = readResults.slice(0, file_limit);
+  }
+  readResults = readResults.sort((a, b) => a.fp < b.fp ? -1 : 1);
   const sections = [];
   const matchCounts = [];
   const MAX_RESPONSE_BYTES = 4e5;
@@ -43285,17 +43296,25 @@ async function handler2({
     if (summary) {
       if (isJsTs) {
         try {
-          const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          section = `### ${fp}${rangeLabel}
-${buildResponse2(fp, skeleton)}`;
+          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+          const cEntry = fileCache.get(fp);
+          let skeleton;
+          if (cEntry?.skeletons?.has(optKey)) {
+            skeleton = cEntry.skeletons.get(optKey);
+          } else {
+            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            cEntry?.skeletons?.set(optKey, skeleton);
+          }
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}
+${buildResponse2(fp, skeleton, projectDir)}`;
         } catch {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
-          section = `### ${fp}${rangeLabel}
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}
 ${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
         const sliced = sliceLines(contentLines, lineStart, lineEnd);
-        section = `### ${fp}${rangeLabel}
+        section = `### ${relativize(fp, projectDir)}${rangeLabel}
 ${sliced.join("\n")}`;
       }
     } else if (useContext) {
@@ -43309,7 +43328,7 @@ ${sliced.join("\n")}`;
         max_line_length
       );
       if (!ctx) continue;
-      section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
+      section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
 ${ctx.text}`;
     } else {
       let fileLines = sliceLines(contentLines, lineStart, lineEnd);
@@ -43319,15 +43338,15 @@ ${ctx.text}`;
         fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
       }
       const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
-      section = `### ${fp}${lineInfo}
+      section = `### ${relativize(fp, projectDir)}${lineInfo}
 ${addLineNumbers(fileLines, lineStart ?? 1)}`;
     }
     if (responseSize + section.length > MAX_RESPONSE_BYTES) {
       if (isJsTs && !summary) {
         try {
           const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-          const autoSummary = `### ${fp} \u26A1auto-summary
-${buildResponse2(fp, skeleton)}`;
+          const autoSummary = `### ${relativize(fp, projectDir)} \u26A1auto-summary
+${buildResponse2(fp, skeleton, projectDir)}`;
           if (responseSize + autoSummary.length <= MAX_RESPONSE_BYTES) {
             sections.push(autoSummary);
             responseSize += autoSummary.length + 2;
@@ -43404,6 +43423,88 @@ Typical savings: read 20 files in one call instead of 20 sequential Reads.`,
   );
 }
 
+// src/tools/run.js
+import { exec as exec2 } from "child_process";
+import { promisify as promisify2 } from "util";
+var execAsync2 = promisify2(exec2);
+var ANSI_RE = /\x1B\[[0-9;]*[mGKHFJK]/g;
+function stripAnsi(str) {
+  return str.replace(ANSI_RE, "");
+}
+var ERROR_RE = /error\s*TS\d+|^\s*(Error|TypeError|SyntaxError|ReferenceError|Warning):|FAIL\s|✗|✕|\bfailed\b|\bERROR\b/i;
+function isErrorLine(line) {
+  return ERROR_RE.test(line);
+}
+function compressOutput(text, maxLines, keepErrors) {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  const head = lines.slice(0, maxLines);
+  const tail = lines.slice(maxLines);
+  let result = head.join("\n");
+  result += `
+  \u2026 [${tail.length} line${tail.length !== 1 ? "s" : ""} omitted]`;
+  if (keepErrors) {
+    const errs = tail.filter(isErrorLine);
+    if (errs.length > 0) {
+      result += "\n  \u2026 [errors from omitted section:]\n" + errs.join("\n");
+    }
+  }
+  return result;
+}
+async function handler3({ command, keep_errors, max_lines, strip_ansi }) {
+  const startMs = Date.now();
+  try {
+    const { stdout, stderr } = await execAsync2(command, {
+      cwd: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+      shell: true,
+      maxBuffer: 10 * 1024 * 1024,
+      // 10 MB
+      timeout: 6e4
+    });
+    let combined = "";
+    if (stdout) combined += stdout;
+    if (stderr) combined += (combined ? "\n" : "") + stderr;
+    if (strip_ansi) combined = stripAnsi(combined);
+    combined = compressOutput(combined.trimEnd(), max_lines, keep_errors);
+    const elapsed = Date.now() - startMs;
+    return {
+      content: [{ type: "text", text: `$ ${command}  [${elapsed}ms]
+${combined || "(no output)"}` }]
+    };
+  } catch (err) {
+    let out = (err.stdout || "") + (err.stdout && err.stderr ? "\n" : "") + (err.stderr || err.message || String(err));
+    if (strip_ansi) out = stripAnsi(out);
+    out = compressOutput(out.trimEnd(), max_lines, keep_errors);
+    const elapsed = Date.now() - startMs;
+    return {
+      content: [{ type: "text", text: `$ ${command}  [${elapsed}ms, exit ${err.code ?? 1}]
+${out || "(no output)"}` }]
+    };
+  }
+}
+function registerRun(server2) {
+  server2.tool(
+    "brozi_run",
+    `Run a shell command and return compressed, ANSI-stripped output. Replaces Bash
+when you only need a clean summary \u2014 not full verbose output.
+
+Params:
+  command      \u2013 shell command to run (runs in CLAUDE_PROJECT_DIR)
+  keep_errors  \u2013 preserve error/warning lines even when truncating (default: true)
+  max_lines    \u2013 maximum output lines to return (default: 50)
+  strip_ansi   \u2013 remove ANSI color escape codes (default: true)
+
+Typical savings: npm test output 800 lines \u2192 50 lines with all failures preserved.`,
+    {
+      command: external_exports.string().describe("Shell command to execute."),
+      keep_errors: external_exports.boolean().default(true).describe("Keep error/warning lines when truncating."),
+      max_lines: external_exports.number().int().min(1).default(50).describe("Max output lines to return."),
+      strip_ansi: external_exports.boolean().default(true).describe("Strip ANSI escape codes from output.")
+    },
+    handler3
+  );
+}
+
 // src/index.js
 process.on("uncaughtException", (err) => {
   process.stderr.write(`[brozicode] uncaughtException: ${err?.message}
@@ -43418,10 +43519,11 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.5.0"
+  version: "0.6.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);
+registerRun(server);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 /*! Bundled license information:

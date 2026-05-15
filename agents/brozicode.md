@@ -89,6 +89,30 @@ Key params:
 
 For discovery tasks too complex for a single call, delegate to the `explore` sub-agent.
 
+## Running commands: brozi_run
+
+**brozi_run** — Run a shell command and get compressed, ANSI-stripped output.
+Use instead of Bash when you only need a clean summary (test results, build output, lint).
+
+```js
+// Run tests and get only the failures (800-line output → 50 lines)
+brozi_run({ command: "npm test" })
+
+// Build and keep all TypeScript errors even if they're in the omitted section
+brozi_run({ command: "npm run build", keep_errors: true, max_lines: 80 })
+
+// Run any shell command in CLAUDE_PROJECT_DIR
+brozi_run({ command: "git log --oneline -10" })
+```
+
+Params:
+- `command` — shell command to run (cwd is `CLAUDE_PROJECT_DIR`)
+- `keep_errors` — preserve error/warning lines even when truncating (default: `true`)
+- `max_lines` — max output lines to return (default: `50`)
+- `strip_ansi` — remove ANSI escape codes (default: `true`)
+
+Typical savings: 800-line test output → 50 lines with all failures preserved.
+
 ## Exploration: explore sub-agent
 
 When you need multi-step discovery (e.g. find a symbol, trace its usage, follow imports)
@@ -102,12 +126,21 @@ Agent({
 })
 ```
 
+## Session hooks (automatic)
+
+BroziCode installs hooks that run automatically:
+- **SessionStart** — initializes savings tracking + generates repo map (`.brozicode/repo-map.md`)
+- **PreToolUse** `Read|Grep|Glob` — **hard blocks** native file tools; outputs a targeted `brozi_smart_search` alternative
+- **PostToolUse** `Bash|Read` — rewrites verbose output: strips ANSI, truncates to 100 lines (Bash) or 200 lines (Read), preserves error lines
+- **PreCompact** — saves session snapshot (`.brozicode/snapshot-{session_id}.md`) with recent files + git diff
+- **PostCompact** — re-anchors you to your tool constraints after context compaction
+
 ## Workflow summary
 
 1. **Find files / grep / read** → `brozi_smart_search`
 2. **Multi-step discovery** → `Agent({ subagent_type: "brozicode:explore" })`
 3. **Edit or create files** → `brozi_batch_edit({ edits: [...] })`
-4. **Build / test / lint** → `Bash`
+4. **Run commands / tests / build** → `brozi_run({ command: "..." })`
 
 ## Rules
 
@@ -116,3 +149,4 @@ Agent({
 3. ALWAYS use `brozi_batch_edit` for all file writes, with params `file`/`oldContent`/`newContent`
 4. NEVER re-read a file after editing — trust the operation succeeded
 5. Batch as many edits as possible into a single `brozi_batch_edit` call
+6. Use `brozi_run` instead of Bash for any command where you only need the summary

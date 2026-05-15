@@ -6,6 +6,10 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-tracker.js\" init"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-repo-map.js\""
           }
         ]
       }
@@ -26,12 +30,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'BROZICODE: Use brozi_smart_search instead of native Read/Grep/Glob — it discovers, filters, and reads in one call with glob patterns, content regex, line ranges, and caching.'"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-blocker.js\""
           }
         ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "^(Bash|Read)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/post-tool-rewriter.js\""
+          }
+        ]
+      },
       {
         "matcher": "^(Edit|Write|MultiEdit)$",
         "hooks": [
@@ -86,6 +99,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-compact-snapshot.js\""
+          },
+          {
+            "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-tracker.js\" track"
           }
         ]
@@ -94,6 +111,10 @@
     "PostCompact": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-reanchor.js\""
+          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-tracker.js\" track"

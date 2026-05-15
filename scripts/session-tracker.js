@@ -75,9 +75,25 @@ process.stdin.on('end', () => {
       savings.savedRoundtrips += 1;
       savings.tokensEstimated += 1_800;
       savings.smartSearchCalls += 1;
+    } else if (toolName.includes('brozi_run')) {
+      // Compressed command output — estimate 800 tokens saved per call
+      savings.savedRoundtrips += 1;
+      savings.tokensEstimated += 800;
+      savings.runCalls = (savings.runCalls || 0) + 1;
     } else if (NATIVE_FALLBACK_TOOLS.has(toolName)) {
       // Agent used a native tool despite brozi hooks — track compliance
       savings.nativeFallbacks = (savings.nativeFallbacks || 0) + 1;
+    }
+
+    // Track recently accessed files for pre-compact snapshot
+    if (toolName === 'Read') {
+      const fp = event?.tool_input?.file_path || event?.tool_input?.path;
+      if (fp) {
+        if (!savings.recentFiles) savings.recentFiles = [];
+        savings.recentFiles.push(fp);
+        // Keep last 30 entries only
+        if (savings.recentFiles.length > 30) savings.recentFiles = savings.recentFiles.slice(-30);
+      }
     }
 
     saveSavings(savings);
@@ -97,8 +113,14 @@ process.stdin.on('end', () => {
         ? Math.round((calls / (calls + fallbacks)) * 100)
         : 100;
 
-      let line = `\n brozicode · session saved: ~$${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips`;
-      line    += `  [${savings.batchEditCalls}× batch-edit, ${savings.smartSearchCalls}× smart-search]`;
+      const runCalls    = savings.runCalls || 0;
+      const toolSummary = [
+        savings.batchEditCalls  > 0 && `${savings.batchEditCalls}× batch-edit`,
+        savings.smartSearchCalls > 0 && `${savings.smartSearchCalls}× smart-search`,
+        runCalls                > 0 && `${runCalls}× run`,
+      ].filter(Boolean).join(', ');
+      let line = `\n brozicode · session saved: ~${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips`;
+      line    += `  [${toolSummary || 'no brozi tool calls'}]`;
       if (fallbacks > 0) line += `  ⚠ ${fallbacks} native fallback${fallbacks !== 1 ? 's' : ''} (${compliance}% compliance)`;
       process.stdout.write(line + '\n\n');
     }

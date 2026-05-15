@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerBatchEdit } from './tools/batch-edit.js';
 import { registerSmartSearch } from './tools/smart-search.js';
+import { registerRun } from './tools/run.js';
 
 // ─── Global error handlers ────────────────────────────────────────────────────
 // Catch unhandled errors so the MCP server stays alive instead of crashing
@@ -20,11 +21,12 @@ process.on('unhandledRejection', (reason) => {
 
 const server = new McpServer({
   name: 'brozicode',
-  version: '0.5.0',
+  version: '0.6.0',
 });
 
 registerBatchEdit(server);
 registerSmartSearch(server);
+registerRun(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
