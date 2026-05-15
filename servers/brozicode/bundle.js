@@ -42609,7 +42609,7 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
   const nearestMatch = findNearestMatch(fileContent, oldContent);
   return {
     success: false,
-    error: buildMatchError(oldContent, nearestMatch)
+    error: buildMatchError(fileContent, oldContent, nearestMatch)
   };
 }
 function findNearestMatch(fileContent, oldContent) {
@@ -42643,17 +42643,34 @@ function levenshteinDistance(a, b) {
   }
   return prev[n];
 }
-function buildMatchError(oldContent, nearestMatch) {
-  const firstLine = oldContent.split("\n")[0].slice(0, 100);
-  const ellipsis = oldContent.split("\n").length > 1 ? "..." : "";
-  let msg = `Could not find:
-  "${firstLine}${ellipsis}"`;
+function buildMatchError(fileContent, oldContent, nearestMatch) {
+  const oldLines = oldContent.split("\n");
+  const firstLine = oldLines[0].slice(0, 120);
+  const suffix = oldLines.length > 1 ? ` \u2026 (+${oldLines.length - 1} lines)` : "";
+  let msg = `\u274C MATCH FAILED \u2014 oldContent not found in file.
+`;
+  msg += `   Looking for: "${firstLine}"${suffix}
+`;
   if (nearestMatch) {
+    const allLines = fileContent.split("\n");
+    const winStart = Math.max(0, nearestMatch.lineNum - 3);
+    const winEnd = Math.min(allLines.length, nearestMatch.lineNum - 1 + oldLines.length + 3);
+    const snippet = allLines.slice(winStart, winEnd).join("\n");
     msg += `
-Nearest match at line ${nearestMatch.lineNum}:
-  "${nearestMatch.line.trim()}"`;
+   Nearest match at line ${nearestMatch.lineNum}: "${nearestMatch.line.trim()}"
+`;
     msg += `
-Suggestion: update oldContent to match the actual file content.`;
+   \u270F Correct oldContent to use (file lines ${winStart + 1}\u2013${winEnd}):
+`;
+    msg += `   \`\`\`
+${snippet}
+   \`\`\`
+`;
+    msg += `
+   \u2192 Copy the relevant portion above as your oldContent and retry.`;
+  } else {
+    msg += `
+   No similar line found in file. Verify the text exists verbatim, or use overwrite:true.`;
   }
   return msg;
 }
@@ -42698,9 +42715,10 @@ async function runValidation(validate, editedFiles) {
 function buildResponse(results, validationResult, totalEdits) {
   const succeeded = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success);
+  const skipped = totalEdits - results.length;
   const filesEdited = [...new Set(succeeded.map((r) => r.file))];
   let text = "";
-  if (failed.length === 0) {
+  if (failed.length === 0 && skipped === 0) {
     text += `\u2713 Applied ${succeeded.length} edit(s) across ${filesEdited.length} file(s)
 
 `;
@@ -42713,7 +42731,8 @@ function buildResponse(results, validationResult, totalEdits) {
 `;
     });
   } else if (succeeded.length > 0) {
-    text += `\u26A0 Applied ${succeeded.length} of ${totalEdits} edit(s). ${failed.length} failed.
+    const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : "";
+    text += `\u26A0 Applied ${succeeded.length} of ${totalEdits} edit(s) \u2014 ${failed.length} failed${skippedNote}.
 
 `;
     const byFile = {};
@@ -42721,24 +42740,43 @@ function buildResponse(results, validationResult, totalEdits) {
       byFile[r.file] = (byFile[r.file] || 0) + 1;
     });
     Object.entries(byFile).forEach(([file, count]) => {
-      text += `  ${file}  ${count} edit(s) applied
+      text += `  \u2713 ${file}  ${count} edit(s)
 `;
     });
     text += `
 Failed edits:
 `;
     failed.forEach((r) => {
-      text += `  ${r.file} \u2014 ${r.error}
+      text += `
+  \u2717 ${r.file}
+  ${r.error.split("\n").join("\n  ")}
 `;
     });
+    if (skipped > 0) {
+      text += `
+\u26A0 ${skipped} edit(s) were NOT attempted because stopOnFirstError aborted the batch.
+`;
+      text += `  \u2192 Fix the failed edit(s) above, then resubmit the ENTIRE batch (all ${totalEdits} edits).
+`;
+    }
   } else {
-    text += `\u2717 No edits applied. ${failed.length} error(s).
+    const skippedNote = skipped > 0 ? ` (${skipped} not attempted)` : "";
+    text += `\u2717 0 of ${totalEdits} edits applied \u2014 all ${failed.length} failed${skippedNote}.
 
 `;
     failed.forEach((r) => {
-      text += `  ${r.file} \u2014 ${r.error}
+      text += `
+  \u2717 ${r.file}
+  ${r.error.split("\n").join("\n  ")}
 `;
     });
+    if (skipped > 0) {
+      text += `
+\u26A0 ${skipped} edit(s) were NOT attempted.
+`;
+      text += `  \u2192 Fix the error(s) above, then resubmit the ENTIRE batch (all ${totalEdits} edits).
+`;
+    }
   }
   if (validationResult) {
     text += `

@@ -62,7 +62,7 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
   const nearestMatch = findNearestMatch(fileContent, oldContent);
   return {
     success: false,
-    error: buildMatchError(oldContent, nearestMatch),
+    error: buildMatchError(fileContent, oldContent, nearestMatch),
   };
 }
 
@@ -107,14 +107,30 @@ function levenshteinDistance(a, b) {
   return prev[n];
 }
 
-function buildMatchError(oldContent, nearestMatch) {
-  const firstLine = oldContent.split('\n')[0].slice(0, 100);
-  const ellipsis  = oldContent.split('\n').length > 1 ? '...' : '';
-  let msg = `Could not find:\n  "${firstLine}${ellipsis}"`;
+function buildMatchError(fileContent, oldContent, nearestMatch) {
+  const oldLines  = oldContent.split('\n');
+  const firstLine = oldLines[0].slice(0, 120);
+  const suffix    = oldLines.length > 1 ? ` … (+${oldLines.length - 1} lines)` : '';
+
+  let msg = `❌ MATCH FAILED — oldContent not found in file.\n`;
+  msg    += `   Looking for: "${firstLine}"${suffix}\n`;
+
   if (nearestMatch) {
-    msg += `\nNearest match at line ${nearestMatch.lineNum}:\n  "${nearestMatch.line.trim()}"`;
-    msg += `\nSuggestion: update oldContent to match the actual file content.`;
+    const allLines = fileContent.split('\n');
+    // Extract a window of lines around the nearest match to give the model
+    // the exact text it should use as oldContent.
+    const winStart = Math.max(0, nearestMatch.lineNum - 3);
+    const winEnd   = Math.min(allLines.length, nearestMatch.lineNum - 1 + oldLines.length + 3);
+    const snippet  = allLines.slice(winStart, winEnd).join('\n');
+
+    msg += `\n   Nearest match at line ${nearestMatch.lineNum}: "${nearestMatch.line.trim()}"\n`;
+    msg += `\n   ✏ Correct oldContent to use (file lines ${winStart + 1}–${winEnd}):\n`;
+    msg += `   \`\`\`\n${snippet}\n   \`\`\`\n`;
+    msg += `\n   → Copy the relevant portion above as your oldContent and retry.`;
+  } else {
+    msg += `\n   No similar line found in file. Verify the text exists verbatim, or use overwrite:true.`;
   }
+
   return msg;
 }
 
@@ -167,11 +183,13 @@ async function runValidation(validate, editedFiles) {
 function buildResponse(results, validationResult, totalEdits) {
   const succeeded   = results.filter(r => r.success);
   const failed      = results.filter(r => !r.success);
+  // Edits never attempted because stopOnFirstError aborted the batch early
+  const skipped     = totalEdits - results.length;
   const filesEdited = [...new Set(succeeded.map(r => r.file))];
 
   let text = '';
 
-  if (failed.length === 0) {
+  if (failed.length === 0 && skipped === 0) {
     text += `✓ Applied ${succeeded.length} edit(s) across ${filesEdited.length} file(s)\n\n`;
     const byFile = {};
     succeeded.forEach(r => { byFile[r.file] = (byFile[r.file] || 0) + 1; });
@@ -179,17 +197,27 @@ function buildResponse(results, validationResult, totalEdits) {
       text += `  ${file}  ${count} edit(s) applied\n`;
     });
   } else if (succeeded.length > 0) {
-    text += `⚠ Applied ${succeeded.length} of ${totalEdits} edit(s). ${failed.length} failed.\n\n`;
+    const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : '';
+    text += `⚠ Applied ${succeeded.length} of ${totalEdits} edit(s) — ${failed.length} failed${skippedNote}.\n\n`;
     const byFile = {};
     succeeded.forEach(r => { byFile[r.file] = (byFile[r.file] || 0) + 1; });
     Object.entries(byFile).forEach(([file, count]) => {
-      text += `  ${file}  ${count} edit(s) applied\n`;
+      text += `  ✓ ${file}  ${count} edit(s)\n`;
     });
     text += `\nFailed edits:\n`;
-    failed.forEach(r => { text += `  ${r.file} — ${r.error}\n`; });
+    failed.forEach(r => { text += `\n  ✗ ${r.file}\n  ${r.error.split('\n').join('\n  ')}\n`; });
+    if (skipped > 0) {
+      text += `\n⚠ ${skipped} edit(s) were NOT attempted because stopOnFirstError aborted the batch.\n`;
+      text += `  → Fix the failed edit(s) above, then resubmit the ENTIRE batch (all ${totalEdits} edits).\n`;
+    }
   } else {
-    text += `✗ No edits applied. ${failed.length} error(s).\n\n`;
-    failed.forEach(r => { text += `  ${r.file} — ${r.error}\n`; });
+    const skippedNote = skipped > 0 ? ` (${skipped} not attempted)` : '';
+    text += `✗ 0 of ${totalEdits} edits applied — all ${failed.length} failed${skippedNote}.\n\n`;
+    failed.forEach(r => { text += `\n  ✗ ${r.file}\n  ${r.error.split('\n').join('\n  ')}\n`; });
+    if (skipped > 0) {
+      text += `\n⚠ ${skipped} edit(s) were NOT attempted.\n`;
+      text += `  → Fix the error(s) above, then resubmit the ENTIRE batch (all ${totalEdits} edits).\n`;
+    }
   }
 
   if (validationResult) {
