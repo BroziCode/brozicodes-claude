@@ -43577,7 +43577,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.6.0"
+  version: "0.6.1"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

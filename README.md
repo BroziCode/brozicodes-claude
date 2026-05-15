@@ -117,7 +117,7 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.6.0**
+**v0.6.1**
 
 ## License
 
