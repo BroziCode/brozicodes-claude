@@ -481,7 +481,13 @@ async function handler({
   // 6. Process files, apply content_regex filter, build output
   const sections     = [];
   const matchCounts  = [];
-  const MAX_RESPONSE_BYTES = 400_000;
+  // Claude Code's internal MCP result token limit is well below 400KB;
+  // 150KB keeps individual responses safely under that threshold.
+  const MAX_RESPONSE_BYTES  = 150_000;
+  // JS/TS files larger than this get auto-skeletonized in plain-content mode
+  // to prevent the chunk-read spiral that occurs when a raw 2500-line file
+  // overflows Claude Code's MCP response buffer.
+  const MAX_FILE_LINES_RAW  = 300;
   let responseSize   = 0;
   const skippedFiles = [];
 
@@ -551,15 +557,39 @@ async function handler({
       section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
 
     } else {
-      // Plain content mode — slice, apply limits, add line numbers
-      let fileLines = sliceLines(contentLines, lineStart, lineEnd);
-      if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
-      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-        fileLines = fileLines.slice(0, lines_per_file);
-        fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
+      // Plain content mode — but auto-skeleton large JS/TS files with no explicit range.
+      // Without this gate a 2500-line file returns ~90KB raw, exceeds Claude Code's
+      // internal MCP token buffer, gets saved to disk, and triggers an expensive
+      // chunk-read subagent spiral (observed cost: ~57k tokens on a single file).
+      if (isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+        try {
+          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+          const cEntry = fileCache.get(fp);
+          let   skeleton;
+          if (cEntry?.skeletons?.has(optKey)) {
+            skeleton = cEntry.skeletons.get(optKey);
+          } else {
+            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            cEntry?.skeletons?.set(optKey, skeleton);
+          }
+          const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
+          section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
+        } catch {
+          // skeleton failed — fall through to plain truncated output
+        }
       }
-      const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
-      section = `### ${relativize(fp, projectDir)}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
+
+      if (!section) {
+        // Standard plain-content path: slice, apply limits, add line numbers
+        let fileLines = sliceLines(contentLines, lineStart, lineEnd);
+        if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+          fileLines = fileLines.slice(0, lines_per_file);
+          fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
+        }
+        const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
+        section = `### ${relativize(fp, projectDir)}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
+      }
     }
 
     // ── Per-file response size guard ──────────────────────────────────────

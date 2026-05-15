@@ -43272,7 +43272,8 @@ async function handler2({
   readResults = readResults.sort((a, b) => a.fp < b.fp ? -1 : 1);
   const sections = [];
   const matchCounts = [];
-  const MAX_RESPONSE_BYTES = 4e5;
+  const MAX_RESPONSE_BYTES = 15e4;
+  const MAX_FILE_LINES_RAW = 300;
   let responseSize = 0;
   const skippedFiles = [];
   for (const entry of readResults) {
@@ -43331,15 +43332,34 @@ ${sliced.join("\n")}`;
       section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
 ${ctx.text}`;
     } else {
-      let fileLines = sliceLines(contentLines, lineStart, lineEnd);
-      if (max_line_length > 0) fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
-      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-        fileLines = fileLines.slice(0, lines_per_file);
-        fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
+      if (isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+        try {
+          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+          const cEntry = fileCache.get(fp);
+          let skeleton;
+          if (cEntry?.skeletons?.has(optKey)) {
+            skeleton = cEntry.skeletons.get(optKey);
+          } else {
+            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            cEntry?.skeletons?.set(optKey, skeleton);
+          }
+          const note = `\u26A1auto-skeleton (${contentLines.length} lines \u2014 add summary:true or a #N-M range to silence this)`;
+          section = `### ${relativize(fp, projectDir)} ${note}
+${buildResponse2(fp, skeleton, projectDir)}`;
+        } catch {
+        }
       }
-      const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
-      section = `### ${relativize(fp, projectDir)}${lineInfo}
+      if (!section) {
+        let fileLines = sliceLines(contentLines, lineStart, lineEnd);
+        if (max_line_length > 0) fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
+        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+          fileLines = fileLines.slice(0, lines_per_file);
+          fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
+        }
+        const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
+        section = `### ${relativize(fp, projectDir)}${lineInfo}
 ${addLineNumbers(fileLines, lineStart ?? 1)}`;
+      }
     }
     if (responseSize + section.length > MAX_RESPONSE_BYTES) {
       if (isJsTs && !summary) {
