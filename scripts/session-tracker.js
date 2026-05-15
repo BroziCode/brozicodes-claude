@@ -37,7 +37,9 @@ process.stdin.on('end', () => {
 
   function saveSavings(data) {
     try {
-      fs.writeFileSync(SAVINGS_FILE, JSON.stringify(data), 'utf8');
+      const tmp = SAVINGS_FILE + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(data), 'utf8');
+      fs.renameSync(tmp, SAVINGS_FILE); // atomic on POSIX — prevents lost updates under concurrent hook fires
     } catch { /* ignore write errors */ }
   }
 

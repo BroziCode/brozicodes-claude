@@ -42614,31 +42614,34 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
 }
 function findNearestMatch(fileContent, oldContent) {
   const targetLine = oldContent.trim().split("\n")[0].trim();
-  const fileLines = fileContent.split("\n").slice(0, 200);
+  const cappedTarget = targetLine.slice(0, 200);
+  const allLines = fileContent.split("\n");
+  const step = Math.max(1, Math.floor(allLines.length / 500));
   let bestScore = Infinity;
   let bestLine = null;
   let bestLineNum = 0;
-  const cappedTarget = targetLine.slice(0, 200);
-  fileLines.forEach((line, i) => {
-    const score = levenshteinDistance(line.trim().slice(0, 200), cappedTarget);
+  for (let i = 0; i < allLines.length; i += step) {
+    const score = levenshteinDistance(allLines[i].trim().slice(0, 200), cappedTarget);
     if (score < bestScore) {
       bestScore = score;
-      bestLine = line;
+      bestLine = allLines[i];
       bestLineNum = i + 1;
     }
-  });
+  }
   return bestScore < 50 ? { line: bestLine, lineNum: bestLineNum } : null;
 }
 function levenshteinDistance(a, b) {
   const m = a.length, n = b.length;
-  const dp = Array.from(
-    { length: m + 1 },
-    (_, i) => Array.from({ length: n + 1 }, (_2, j) => i === 0 ? j : j === 0 ? i : 0)
-  );
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
-  return dp[m][n];
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1] : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
 }
 function buildMatchError(oldContent, nearestMatch) {
   const firstLine = oldContent.split("\n")[0].slice(0, 100);
@@ -42757,27 +42760,35 @@ async function handler({ edits, validate, stopOnFirstError }) {
   }
   const fileContents = /* @__PURE__ */ new Map();
   const isNewFile = /* @__PURE__ */ new Set();
-  for (const [filePath, editsForFile] of fileEdits.entries()) {
-    const isCreateOrOverwrite = editsForFile.every(
-      (e) => (e.oldContent === void 0 || e.oldContent === "") && e.overwrite !== false
-    );
-    try {
-      fileContents.set(filePath, await fs.readFile(filePath, "utf8"));
-    } catch {
-      if (isCreateOrOverwrite) {
-        fileContents.set(filePath, "");
-        isNewFile.add(filePath);
-      } else {
-        return {
-          content: [{
-            type: "text",
-            text: `\u2717 Could not read file: ${filePath}
-If you're creating a new file, omit oldContent entirely.`
-          }],
-          isError: true
-        };
+  const readResults = await Promise.all(
+    [...fileEdits.entries()].map(async ([filePath, editsForFile]) => {
+      const isCreateOrOverwrite = editsForFile.every(
+        (e) => (e.oldContent === void 0 || e.oldContent === "") && e.overwrite !== false
+      );
+      try {
+        const content = await fs.readFile(filePath, "utf8");
+        return { filePath, content, isNew: false };
+      } catch {
+        if (isCreateOrOverwrite) {
+          return { filePath, content: "", isNew: true };
+        }
+        return { filePath, content: null, isNew: false, readError: true };
       }
+    })
+  );
+  for (const { filePath, content, isNew, readError } of readResults) {
+    if (readError) {
+      return {
+        content: [{
+          type: "text",
+          text: `\u2717 Could not read file: ${filePath}
+If you're creating a new file, omit oldContent entirely.`
+        }],
+        isError: true
+      };
     }
+    fileContents.set(filePath, content);
+    if (isNew) isNewFile.add(filePath);
   }
   const results = [];
   const modified = new Map(fileContents);
@@ -42828,12 +42839,12 @@ If you're creating a new file, omit oldContent entirely.`
     const filesToWrite = stopOnFirstError ? [...modified.keys()] : [...new Set(results.filter((r) => r.success).map(
       (r) => path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file)
     ))];
-    for (const filePath of filesToWrite) {
-      if (modified.get(filePath) !== fileContents.get(filePath) || isNewFile.has(filePath)) {
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, modified.get(filePath), "utf8");
-      }
-    }
+    await Promise.all(
+      filesToWrite.filter((fp) => modified.get(fp) !== fileContents.get(fp) || isNewFile.has(fp)).map(async (fp) => {
+        await fs.mkdir(path.dirname(fp), { recursive: true });
+        await fs.writeFile(fp, modified.get(fp), "utf8");
+      })
+    );
   }
   let validationResult = null;
   if (validate !== "none" && failures.length === 0) {
@@ -42896,23 +42907,74 @@ function parseFile(code, filePath) {
     });
   }
 }
+function buildLineOffsets(code) {
+  const offsets = [0];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "\n") offsets.push(i + 1);
+  }
+  return offsets;
+}
+function lineOf(charOffset, lineOffsets) {
+  let lo = 0, hi = lineOffsets.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (lineOffsets[mid] <= charOffset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+var CHILD_KEYS = [
+  "body",
+  "declarations",
+  "declaration",
+  "specifiers",
+  "params",
+  "arguments",
+  "consequent",
+  "alternate",
+  "init",
+  "test",
+  "update",
+  "left",
+  "right",
+  "object",
+  "property",
+  "callee",
+  "expression",
+  "id",
+  "superClass",
+  "value",
+  "key",
+  "elements",
+  "properties",
+  "block",
+  "handler",
+  "finalizer",
+  "cases",
+  "discriminant",
+  "tag",
+  "quasi",
+  "expressions",
+  "quasis"
+];
 function walk(node, visitors) {
   if (!node || typeof node !== "object") return;
   const visit = visitors[node.type];
-  if (visit) visit(node);
-  for (const key of Object.keys(node)) {
+  if (visit) {
+    const result = visit(node);
+    if (result === "skip") return;
+  }
+  for (const key of CHILD_KEYS) {
     const child = node[key];
+    if (!child) continue;
     if (Array.isArray(child)) {
-      child.forEach((c) => {
+      for (const c of child) {
         if (c && c.type) walk(c, visitors);
-      });
-    } else if (child && typeof child === "object" && child.type) {
+      }
+    } else if (child.type) {
       walk(child, visitors);
     }
   }
-}
-function lineOf(node, code) {
-  return code.slice(0, node.start).split("\n").length;
 }
 function getSignature(node, code) {
   const body = node.body ?? node.value?.body;
@@ -42954,87 +43016,78 @@ function extractExportMeta(node) {
 function extractSkeleton(code, filePath, options) {
   const { includeImports, includeTypes, includePrivate } = options;
   const ast = parseFile(code, filePath);
-  const totalLines = code.split("\n").length;
+  const lineOffsets = buildLineOffsets(code);
+  const totalLines = lineOffsets.length;
   const skeletonLines = [];
   const imports = [];
   const exports = [];
-  const addLine = (lineNum, text, indent = "") => {
-    skeletonLines.push({ lineNum, text: indent + text });
+  const addLine = (charOffset, text, indent = "") => {
+    skeletonLines.push({ lineNum: lineOf(charOffset, lineOffsets), text: indent + text });
   };
-  const classRanges = [];
-  function insideClass(node) {
-    return classRanges.some(([start, end]) => node.start >= start && node.end <= end);
-  }
   walk(ast, {
     ClassDeclaration(node) {
-      classRanges.push([node.start, node.end]);
-      const ln = lineOf(node, code);
-      addLine(ln, getClassHeader(node, code));
+      addLine(node.start, getClassHeader(node, code));
       for (const member of node.body.body) {
         if (!includePrivate && isPrivate(member)) continue;
-        const memberLn = lineOf(member, code);
         if (member.type === "ClassMethod" || member.type === "ClassPrivateMethod") {
-          addLine(memberLn, getSignature(member, code), "  ");
+          addLine(member.start, getSignature(member, code), "  ");
         } else if (member.type === "ClassProperty" || member.type === "ClassPrivateProperty") {
           const propText = code.slice(member.start, member.end).split("\n")[0];
           const withoutValue = propText.replace(/\s*=\s*.+$/, ";").trimEnd();
-          addLine(memberLn, withoutValue, "  ");
+          addLine(member.start, withoutValue, "  ");
         }
       }
-      const closingLine = code.slice(0, node.body.end).split("\n").length;
-      addLine(closingLine, "}");
+      skeletonLines.push({ lineNum: lineOf(node.body.end - 1, lineOffsets), text: "}" });
+      return "skip";
     },
     ImportDeclaration(node) {
       if (!includeImports) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end).split("\n")[0].trimEnd());
+      addLine(node.start, code.slice(node.start, node.end).split("\n")[0].trimEnd());
       imports.push(extractImportMeta(node));
     },
     ExportAllDeclaration(node) {
-      addLine(lineOf(node, code), code.slice(node.start, node.end).trimEnd());
+      addLine(node.start, code.slice(node.start, node.end).trimEnd());
     },
     ExportNamedDeclaration(node) {
       if (!node.declaration) {
-        addLine(lineOf(node, code), code.slice(node.start, node.end).trimEnd());
+        addLine(node.start, code.slice(node.start, node.end).trimEnd());
       }
       const meta = extractExportMeta(node);
       meta.forEach((m) => m?.name && exports.push(m));
     },
     ExportDefaultDeclaration(node) {
       const decl = node.declaration;
-      const ln = lineOf(node, code);
       if (decl.type === "ClassDeclaration" || decl.type === "FunctionDeclaration") {
-        addLine(ln, "export default " + getSignature(decl, code));
+        addLine(node.start, "export default " + getSignature(decl, code));
         exports.push({ name: decl.id?.name || "default", kind: "default" });
       } else {
-        addLine(ln, "export default " + code.slice(decl.start, decl.end).split("\n")[0]);
+        addLine(node.start, "export default " + code.slice(decl.start, decl.end).split("\n")[0]);
         exports.push({ name: "default", kind: "default" });
       }
     },
     FunctionDeclaration(node) {
-      if (insideClass(node)) return;
-      addLine(lineOf(node, code), getSignature(node, code));
+      addLine(node.start, getSignature(node, code));
     },
     VariableDeclaration(node) {
-      if (insideClass(node)) return;
       for (const decl of node.declarations) {
         const init = decl.init;
         if (!init) continue;
         if (init.type === "ArrowFunctionExpression" || init.type === "FunctionExpression") {
-          addLine(lineOf(node, code), getSignature({ ...node, body: init.body }, code));
+          addLine(node.start, getSignature({ ...node, body: init.body }, code));
         }
       }
     },
     TSInterfaceDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     },
     TSTypeAliasDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     },
     TSEnumDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     }
   });
   const seen = /* @__PURE__ */ new Set();
@@ -43084,19 +43137,17 @@ function parseGlobPattern(raw) {
     lineEnd: match[2] ? parseInt(match[2], 10) : parseInt(match[1], 10)
   };
 }
-function sliceLines(content, lineStart, lineEnd) {
-  if (lineStart === null) return content;
-  const lines = content.split("\n");
+function sliceLines(lines, lineStart, lineEnd) {
+  if (lineStart === null) return lines;
   const start = Math.max(0, lineStart - 1);
   const end = Math.min(lines.length, lineEnd);
-  return lines.slice(start, end).join("\n");
+  return lines.slice(start, end);
 }
 function truncateLine(line, maxLen) {
   if (maxLen <= 0 || line.length <= maxLen) return line;
   return line.slice(0, maxLen) + "\u2026";
 }
-function addLineNumbers(content, startLine = 1) {
-  const lines = content.split("\n");
+function addLineNumbers(lines, startLine = 1) {
   const width = String(startLine + lines.length - 1).length;
   return lines.map((line, i) => `${String(startLine + i).padStart(width)}: ${line}`).join("\n");
 }
@@ -43159,16 +43210,21 @@ async function handler2({
   if (multiline) reFlags += "m";
   const contentRe = content_regex ? new RegExp(content_regex, reFlags) : null;
   const useContext = contentRe && (lines_before > 0 || lines_after > 0);
+  const patternResults = await Promise.all(
+    file_glob_patterns.map(async (raw) => {
+      const { pattern, lineStart, lineEnd } = parseGlobPattern(raw);
+      const isAbsolutePattern = path2.isAbsolute(pattern);
+      const matches = await (0, import_fast_glob.default)(pattern, {
+        cwd: isAbsolutePattern ? "/" : projectDir,
+        absolute: true,
+        dot: true,
+        ignore: ["**/node_modules/**", "**/.git/**"]
+      });
+      return { matches, lineStart, lineEnd };
+    })
+  );
   const fileLineRanges = /* @__PURE__ */ new Map();
-  for (const raw of file_glob_patterns) {
-    const { pattern, lineStart, lineEnd } = parseGlobPattern(raw);
-    const isAbsolute = path2.isAbsolute(pattern);
-    const matches = await (0, import_fast_glob.default)(pattern, {
-      cwd: isAbsolute ? "/" : projectDir,
-      absolute: true,
-      dot: true,
-      ignore: ["**/node_modules/**", "**/.git/**"]
-    });
+  for (const { matches, lineStart, lineEnd } of patternResults) {
     for (const absPath of matches) {
       if (type) {
         const ext = path2.extname(absPath).slice(1).toLowerCase();
@@ -43184,15 +43240,12 @@ async function handler2({
   }
   let filePaths = [...fileLineRanges.keys()];
   if (sinceMs !== null) {
-    const filtered = [];
-    for (const fp of filePaths) {
-      try {
-        const stat = await fs2.stat(fp);
-        if (stat.mtimeMs > sinceMs) filtered.push(fp);
-      } catch {
-      }
-    }
-    filePaths = filtered;
+    const statResults = await Promise.all(
+      filePaths.map(
+        (fp) => fs2.stat(fp).then((s) => s.mtimeMs > sinceMs ? fp : null).catch(() => null)
+      )
+    );
+    filePaths = statResults.filter(Boolean);
   }
   if (file_limit > 0 && filePaths.length > file_limit) {
     filePaths = filePaths.slice(0, file_limit);
@@ -43201,18 +43254,20 @@ async function handler2({
     const text = filePaths.sort().join("\n");
     return { content: [{ type: "text", text: text || "No files matched." }] };
   }
+  const readResults = await Promise.all(
+    filePaths.sort().map(
+      (fp) => fs2.readFile(fp, "utf8").then((content) => ({ fp, content })).catch(() => null)
+    )
+  );
   const sections = [];
   const matchCounts = [];
   const MAX_RESPONSE_BYTES = 4e5;
   let responseSize = 0;
   const skippedFiles = [];
-  for (const fp of filePaths.sort()) {
-    let content;
-    try {
-      content = await fs2.readFile(fp, "utf8");
-    } catch {
-      continue;
-    }
+  for (const entry of readResults) {
+    if (!entry) continue;
+    const { fp, content } = entry;
+    const contentLines = content.split("\n");
     let matchCount = 0;
     if (contentRe) {
       contentRe.lastIndex = 0;
@@ -43234,20 +43289,20 @@ async function handler2({
           section = `### ${fp}${rangeLabel}
 ${buildResponse2(fp, skeleton)}`;
         } catch {
-          const sliced = sliceLines(content, lineStart, lineEnd);
+          const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${fp}${rangeLabel}
 ${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
-        const sliced = sliceLines(content, lineStart, lineEnd);
+        const sliced = sliceLines(contentLines, lineStart, lineEnd);
         section = `### ${fp}${rangeLabel}
-${sliced}`;
+${sliced.join("\n")}`;
       }
     } else if (useContext) {
-      const lines = content.split("\n");
+      contentRe.lastIndex = 0;
       const ctx = extractMatchContext(
-        lines,
-        new RegExp(content_regex, reFlags),
+        contentLines,
+        contentRe,
         lines_before,
         lines_after,
         lines_per_file,
@@ -43257,19 +43312,15 @@ ${sliced}`;
       section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
 ${ctx.text}`;
     } else {
-      let sliced = sliceLines(content, lineStart, lineEnd);
-      if (max_line_length > 0 || lines_per_file > 0) {
-        let fileLines = sliced.split("\n");
-        if (max_line_length > 0) fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
-        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-          fileLines = fileLines.slice(0, lines_per_file);
-          fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
-        }
-        sliced = fileLines.join("\n");
+      let fileLines = sliceLines(contentLines, lineStart, lineEnd);
+      if (max_line_length > 0) fileLines = fileLines.map((l) => truncateLine(l, max_line_length));
+      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+        fileLines = fileLines.slice(0, lines_per_file);
+        fileLines.push(`  \u2026 (truncated at ${lines_per_file} lines)`);
       }
       const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
       section = `### ${fp}${lineInfo}
-${addLineNumbers(sliced, lineStart ?? 1)}`;
+${addLineNumbers(fileLines, lineStart ?? 1)}`;
     }
     if (responseSize + section.length > MAX_RESPONSE_BYTES) {
       if (isJsTs && !summary) {
@@ -43367,7 +43418,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.3.0"
+  version: "0.5.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

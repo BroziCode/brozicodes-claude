@@ -93,7 +93,7 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.3.0**
+**v0.5.0**
 
 ## License
 

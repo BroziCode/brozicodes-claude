@@ -32,27 +32,61 @@ function parseFile(code, filePath) {
   }
 }
 
+// ─── Line offset table (O(n) build, O(log n) lookup) ─────────────────────────
+
+function buildLineOffsets(code) {
+  const offsets = [0];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === '\n') offsets.push(i + 1);
+  }
+  return offsets;
+}
+
+/** O(log n) char-offset → 1-based line number via binary search. */
+function lineOf(charOffset, lineOffsets) {
+  let lo = 0, hi = lineOffsets.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineOffsets[mid] <= charOffset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
 // ─── Walker ──────────────────────────────────────────────────────────────────
 
+// Curated child-bearing AST key list — avoids Object.keys() enumeration on every node.
+const CHILD_KEYS = [
+  'body', 'declarations', 'declaration', 'specifiers', 'params', 'arguments',
+  'consequent', 'alternate', 'init', 'test', 'update', 'left', 'right',
+  'object', 'property', 'callee', 'expression', 'id', 'superClass', 'value',
+  'key', 'elements', 'properties', 'block', 'handler', 'finalizer',
+  'cases', 'discriminant', 'tag', 'quasi', 'expressions', 'quasis',
+];
+
+/**
+ * Generic AST walker. Visitors may return 'skip' to prevent recursing
+ * into that node's children (used by ClassDeclaration to avoid double-visiting members).
+ */
 function walk(node, visitors) {
   if (!node || typeof node !== 'object') return;
   const visit = visitors[node.type];
-  if (visit) visit(node);
-  for (const key of Object.keys(node)) {
+  if (visit) {
+    const result = visit(node);
+    if (result === 'skip') return;
+  }
+  for (const key of CHILD_KEYS) {
     const child = node[key];
+    if (!child) continue;
     if (Array.isArray(child)) {
-      child.forEach(c => { if (c && c.type) walk(c, visitors); });
-    } else if (child && typeof child === 'object' && child.type) {
+      for (const c of child) { if (c && c.type) walk(c, visitors); }
+    } else if (child.type) {
       walk(child, visitors);
     }
   }
 }
 
 // ─── Extraction helpers ──────────────────────────────────────────────────────
-
-function lineOf(node, code) {
-  return code.slice(0, node.start).split('\n').length;
-}
 
 function getSignature(node, code) {
   const body = node.body ?? node.value?.body;
@@ -100,60 +134,53 @@ function extractExportMeta(node) {
 
 function extractSkeleton(code, filePath, options) {
   const { includeImports, includeTypes, includePrivate } = options;
-  const ast = parseFile(code, filePath);
-  const totalLines = code.split('\n').length;
+  const ast         = parseFile(code, filePath);
+  const lineOffsets = buildLineOffsets(code); // built once — O(n)
+  const totalLines  = lineOffsets.length;
 
   const skeletonLines = [];
   const imports = [];
   const exports = [];
 
-  const addLine = (lineNum, text, indent = '') => {
-    skeletonLines.push({ lineNum, text: indent + text });
+  // addLine now takes a char offset and resolves line via O(log n) binary search
+  const addLine = (charOffset, text, indent = '') => {
+    skeletonLines.push({ lineNum: lineOf(charOffset, lineOffsets), text: indent + text });
   };
-
-  // Track class node ranges so the generic FunctionDeclaration/VariableDeclaration
-  // visitors don't double-emit nodes that are inside a class body.
-  const classRanges = [];
-
-  function insideClass(node) {
-    return classRanges.some(([start, end]) => node.start >= start && node.end <= end);
-  }
 
   walk(ast, {
     ClassDeclaration(node) {
-      classRanges.push([node.start, node.end]);
-      const ln = lineOf(node, code);
-      addLine(ln, getClassHeader(node, code));
+      addLine(node.start, getClassHeader(node, code));
 
       for (const member of node.body.body) {
         if (!includePrivate && isPrivate(member)) continue;
-        const memberLn = lineOf(member, code);
         if (member.type === 'ClassMethod' || member.type === 'ClassPrivateMethod') {
-          addLine(memberLn, getSignature(member, code), '  ');
+          addLine(member.start, getSignature(member, code), '  ');
         } else if (member.type === 'ClassProperty' || member.type === 'ClassPrivateProperty') {
-          const propText = code.slice(member.start, member.end).split('\n')[0];
+          const propText     = code.slice(member.start, member.end).split('\n')[0];
           const withoutValue = propText.replace(/\s*=\s*.+$/, ';').trimEnd();
-          addLine(memberLn, withoutValue, '  ');
+          addLine(member.start, withoutValue, '  ');
         }
       }
-      // Closing brace on the line after the last member
-      const closingLine = code.slice(0, node.body.end).split('\n').length;
-      addLine(closingLine, '}');
+
+      // Closing brace — last char of the class body block is at node.body.end - 1
+      skeletonLines.push({ lineNum: lineOf(node.body.end - 1, lineOffsets), text: '}' });
+
+      return 'skip'; // members already handled above — prevent walker from re-entering body
     },
 
     ImportDeclaration(node) {
       if (!includeImports) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end).split('\n')[0].trimEnd());
+      addLine(node.start, code.slice(node.start, node.end).split('\n')[0].trimEnd());
       imports.push(extractImportMeta(node));
     },
 
     ExportAllDeclaration(node) {
-      addLine(lineOf(node, code), code.slice(node.start, node.end).trimEnd());
+      addLine(node.start, code.slice(node.start, node.end).trimEnd());
     },
 
     ExportNamedDeclaration(node) {
       if (!node.declaration) {
-        addLine(lineOf(node, code), code.slice(node.start, node.end).trimEnd());
+        addLine(node.start, code.slice(node.start, node.end).trimEnd());
       }
       const meta = extractExportMeta(node);
       meta.forEach(m => m?.name && exports.push(m));
@@ -161,50 +188,47 @@ function extractSkeleton(code, filePath, options) {
 
     ExportDefaultDeclaration(node) {
       const decl = node.declaration;
-      const ln = lineOf(node, code);
       if (decl.type === 'ClassDeclaration' || decl.type === 'FunctionDeclaration') {
-        addLine(ln, 'export default ' + getSignature(decl, code));
+        addLine(node.start, 'export default ' + getSignature(decl, code));
         exports.push({ name: decl.id?.name || 'default', kind: 'default' });
       } else {
-        addLine(ln, 'export default ' + code.slice(decl.start, decl.end).split('\n')[0]);
+        addLine(node.start, 'export default ' + code.slice(decl.start, decl.end).split('\n')[0]);
         exports.push({ name: 'default', kind: 'default' });
       }
     },
 
     FunctionDeclaration(node) {
-      if (insideClass(node)) return;
-      addLine(lineOf(node, code), getSignature(node, code));
+      addLine(node.start, getSignature(node, code));
     },
 
     VariableDeclaration(node) {
-      if (insideClass(node)) return;
       for (const decl of node.declarations) {
         const init = decl.init;
         if (!init) continue;
         if (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression') {
-          addLine(lineOf(node, code), getSignature({ ...node, body: init.body }, code));
+          addLine(node.start, getSignature({ ...node, body: init.body }, code));
         }
       }
     },
 
     TSInterfaceDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     },
 
     TSTypeAliasDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     },
 
     TSEnumDeclaration(node) {
       if (!includeTypes) return;
-      addLine(lineOf(node, code), code.slice(node.start, node.end));
+      addLine(node.start, code.slice(node.start, node.end));
     },
   });
 
   // Sort by line number, deduplicate
-  const seen = new Set();
+  const seen   = new Set();
   const sorted = skeletonLines
     .sort((a, b) => a.lineNum - b.lineNum)
     .filter(({ lineNum }) => {
@@ -253,7 +277,7 @@ function parseGlobPattern(raw) {
   if (hashIdx === -1) return { pattern: raw, lineStart: null, lineEnd: null };
 
   const rangePart = raw.slice(hashIdx + 1);
-  const match = rangePart.match(/^(\d+)(?:-(\d+))?$/);
+  const match     = rangePart.match(/^(\d+)(?:-(\d+))?$/);
   if (!match) return { pattern: raw, lineStart: null, lineEnd: null };
 
   return {
@@ -263,12 +287,15 @@ function parseGlobPattern(raw) {
   };
 }
 
-function sliceLines(content, lineStart, lineEnd) {
-  if (lineStart === null) return content;
-  const lines = content.split('\n');
+/**
+ * Slice a pre-split lines array — avoids re-splitting the content string.
+ * lineStart / lineEnd are 1-based, inclusive. Returns all lines when lineStart is null.
+ */
+function sliceLines(lines, lineStart, lineEnd) {
+  if (lineStart === null) return lines;
   const start = Math.max(0, lineStart - 1);
   const end   = Math.min(lines.length, lineEnd);
-  return lines.slice(start, end).join('\n');
+  return lines.slice(start, end);
 }
 
 function truncateLine(line, maxLen) {
@@ -276,8 +303,8 @@ function truncateLine(line, maxLen) {
   return line.slice(0, maxLen) + '…';
 }
 
-function addLineNumbers(content, startLine = 1) {
-  const lines = content.split('\n');
+/** Add 1-based line numbers to an array of line strings. Returns a joined string. */
+function addLineNumbers(lines, startLine = 1) {
   const width = String(startLine + lines.length - 1).length;
   return lines
     .map((line, i) => `${String(startLine + i).padStart(width)}: ${line}`)
@@ -360,22 +387,24 @@ async function handler({
 
   const useContext = contentRe && (lines_before > 0 || lines_after > 0);
 
-  // 1. Expand all glob patterns, collecting per-file line ranges
+  // 1. Expand all glob patterns in parallel
+  const patternResults = await Promise.all(
+    file_glob_patterns.map(async raw => {
+      const { pattern, lineStart, lineEnd } = parseGlobPattern(raw);
+      const isAbsolutePattern = path.isAbsolute(pattern);
+      const matches = await fg(pattern, {
+        cwd:      isAbsolutePattern ? '/' : projectDir,
+        absolute: true,
+        dot:      true,
+        ignore:   ['**/node_modules/**', '**/.git/**'],
+      });
+      return { matches, lineStart, lineEnd };
+    })
+  );
+
   const fileLineRanges = new Map(); // filePath → { lineStart, lineEnd }
-
-  for (const raw of file_glob_patterns) {
-    const { pattern, lineStart, lineEnd } = parseGlobPattern(raw);
-    const isAbsolute = path.isAbsolute(pattern);
-
-    const matches = await fg(pattern, {
-      cwd:      isAbsolute ? '/' : projectDir,
-      absolute: true,
-      dot:      true,
-      ignore:   ['**/node_modules/**', '**/.git/**'],
-    });
-
+  for (const { matches, lineStart, lineEnd } of patternResults) {
     for (const absPath of matches) {
-      // Extension filter
       if (type) {
         const ext = path.extname(absPath).slice(1).toLowerCase();
         if (ext !== type.toLowerCase()) continue;
@@ -390,17 +419,15 @@ async function handler({
     return { content: [{ type: 'text', text: 'No files matched the provided glob patterns.' }] };
   }
 
-  // 2. Apply if_modified_since filter
+  // 2. Apply if_modified_since filter in parallel
   let filePaths = [...fileLineRanges.keys()];
   if (sinceMs !== null) {
-    const filtered = [];
-    for (const fp of filePaths) {
-      try {
-        const stat = await fs.stat(fp);
-        if (stat.mtimeMs > sinceMs) filtered.push(fp);
-      } catch { /* skip unreadable */ }
-    }
-    filePaths = filtered;
+    const statResults = await Promise.all(
+      filePaths.map(fp =>
+        fs.stat(fp).then(s => (s.mtimeMs > sinceMs ? fp : null)).catch(() => null)
+      )
+    );
+    filePaths = statResults.filter(Boolean);
   }
 
   // 3. Apply file_limit
@@ -414,20 +441,26 @@ async function handler({
     return { content: [{ type: 'text', text: text || 'No files matched.' }] };
   }
 
-  // 5. Read files, apply content_regex filter, build output
+  // 5. Read all files in parallel
+  const readResults = await Promise.all(
+    filePaths.sort().map(fp =>
+      fs.readFile(fp, 'utf8').then(content => ({ fp, content })).catch(() => null)
+    )
+  );
+
+  // 6. Process files, apply content_regex filter, build output
   const sections     = [];
   const matchCounts  = [];
   const MAX_RESPONSE_BYTES = 400_000;
   let responseSize   = 0;
   const skippedFiles = [];
 
-  for (const fp of filePaths.sort()) {
-    let content;
-    try {
-      content = await fs.readFile(fp, 'utf8');
-    } catch {
-      continue;
-    }
+  for (const entry of readResults) {
+    if (!entry) continue;
+    const { fp, content } = entry;
+
+    // Split lines once per file — reused across all processing paths below
+    const contentLines = content.split('\n');
 
     // Content regex filter / match counting
     let matchCount = 0;
@@ -456,51 +489,45 @@ async function handler({
           const skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
           section = `### ${fp}${rangeLabel}\n${buildResponse(fp, skeleton)}`;
         } catch {
-          const sliced = sliceLines(content, lineStart, lineEnd);
+          const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${fp}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
         }
       } else {
-        const sliced = sliceLines(content, lineStart, lineEnd);
-        section = `### ${fp}${rangeLabel}\n${sliced}`;
+        const sliced = sliceLines(contentLines, lineStart, lineEnd);
+        section = `### ${fp}${rangeLabel}\n${sliced.join('\n')}`;
       }
 
     } else if (useContext) {
-      const lines = content.split('\n');
+      // Reuse the already-compiled contentRe — extractMatchContext resets lastIndex per line
+      contentRe.lastIndex = 0;
       const ctx = extractMatchContext(
-        lines,
-        new RegExp(content_regex, reFlags),
+        contentLines,
+        contentRe,
         lines_before,
         lines_after,
         lines_per_file,
         max_line_length,
       );
-      if (!ctx) continue; // regex had no matches in this file
+      if (!ctx) continue;
       section = `### ${fp}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
 
     } else {
-      // Plain content mode — apply limits then add line numbers
-      let sliced = sliceLines(content, lineStart, lineEnd);
-      if (max_line_length > 0 || lines_per_file > 0) {
-        let fileLines = sliced.split('\n');
-        if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
-        if (lines_per_file > 0 && fileLines.length > lines_per_file) {
-          fileLines = fileLines.slice(0, lines_per_file);
-          fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
-        }
-        sliced = fileLines.join('\n');
+      // Plain content mode — slice, apply limits, add line numbers
+      let fileLines = sliceLines(contentLines, lineStart, lineEnd);
+      if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+      if (lines_per_file > 0 && fileLines.length > lines_per_file) {
+        fileLines = fileLines.slice(0, lines_per_file);
+        fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
       }
       const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
-      section = `### ${fp}${lineInfo}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
+      section = `### ${fp}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
     }
 
     // ── Per-file response size guard ──────────────────────────────────────
-    // Before pushing, check if this section would overflow the 400KB cap.
-    // For JS/TS files in plain mode, try auto-summary first — gives the agent
-    // useful structure instead of a hard skip.
     if (responseSize + section.length > MAX_RESPONSE_BYTES) {
       if (isJsTs && !summary) {
         try {
-          const skeleton  = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          const skeleton    = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
           const autoSummary = `### ${fp} ⚡auto-summary\n${buildResponse(fp, skeleton)}`;
           if (responseSize + autoSummary.length <= MAX_RESPONSE_BYTES) {
             sections.push(autoSummary);

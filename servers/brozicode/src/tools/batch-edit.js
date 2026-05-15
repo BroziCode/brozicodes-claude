@@ -59,8 +59,6 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
     // fall through to failure
   }
 
-  // FIX 1: Cap nearest match search to first 5000 chars to avoid
-  // O(m×n) Levenshtein hanging on large files
   const nearestMatch = findNearestMatch(fileContent, oldContent);
   return {
     success: false,
@@ -69,39 +67,44 @@ function applyEditToContent(fileContent, oldContent, newContent, filePath) {
 }
 
 function findNearestMatch(fileContent, oldContent) {
-  const targetLine = oldContent.trim().split('\n')[0].trim();
-  // FIX 1: Only search first 200 lines to prevent event loop block
-  const fileLines  = fileContent.split('\n').slice(0, 200);
-  let bestScore    = Infinity;
-  let bestLine     = null;
-  let bestLineNum  = 0;
-
-  // FIX 1: Also cap target line length to avoid expensive comparison
+  const targetLine   = oldContent.trim().split('\n')[0].trim();
   const cappedTarget = targetLine.slice(0, 200);
+  const allLines     = fileContent.split('\n');
 
-  fileLines.forEach((line, i) => {
-    const score = levenshteinDistance(line.trim().slice(0, 200), cappedTarget);
+  // Sample at most 500 candidate lines spread across the full file
+  const step = Math.max(1, Math.floor(allLines.length / 500));
+
+  let bestScore   = Infinity;
+  let bestLine    = null;
+  let bestLineNum = 0;
+
+  for (let i = 0; i < allLines.length; i += step) {
+    const score = levenshteinDistance(allLines[i].trim().slice(0, 200), cappedTarget);
     if (score < bestScore) {
       bestScore   = score;
-      bestLine    = line;
+      bestLine    = allLines[i];
       bestLineNum = i + 1;
     }
-  });
+  }
 
   return bestScore < 50 ? { line: bestLine, lineNum: bestLineNum } : null;
 }
 
+/** Space-optimised Levenshtein using two rolling rows instead of a full (m+1)×(n+1) matrix. */
 function levenshteinDistance(a, b) {
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i-1] === b[j-1]
-        ? dp[i-1][j-1]
-        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
-  return dp[m][n];
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
 }
 
 function buildMatchError(oldContent, nearestMatch) {
@@ -117,7 +120,6 @@ function buildMatchError(oldContent, nearestMatch) {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
-// FIX 2: Rewritten findProjectRoot — proper termination condition
 async function findProjectRoot(filePath) {
   let dir = path.dirname(path.resolve(filePath));
 
@@ -215,32 +217,39 @@ async function handler({ edits, validate, stopOnFirstError }) {
     fileEdits.get(resolved).push({ ...edit, resolvedPath: resolved });
   }
 
-  // 2. Load all files into memory (new files and overwrite targets handled gracefully)
-  const fileContents  = new Map();
-  const isNewFile     = new Set(); // resolved paths that don't exist yet
+  // 2. Load all files in parallel
+  const fileContents = new Map();
+  const isNewFile    = new Set();
 
-  for (const [filePath, editsForFile] of fileEdits.entries()) {
-    const isCreateOrOverwrite = editsForFile.every(
-      e => (e.oldContent === undefined || e.oldContent === '') && e.overwrite !== false
-    );
-
-    try {
-      fileContents.set(filePath, await fs.readFile(filePath, 'utf8'));
-    } catch {
-      if (isCreateOrOverwrite) {
-        // New file — start with empty content
-        fileContents.set(filePath, '');
-        isNewFile.add(filePath);
-      } else {
-        return {
-          content: [{
-            type: 'text',
-            text: `✗ Could not read file: ${filePath}\nIf you're creating a new file, omit oldContent entirely.`,
-          }],
-          isError: true,
-        };
+  const readResults = await Promise.all(
+    [...fileEdits.entries()].map(async ([filePath, editsForFile]) => {
+      const isCreateOrOverwrite = editsForFile.every(
+        e => (e.oldContent === undefined || e.oldContent === '') && e.overwrite !== false
+      );
+      try {
+        const content = await fs.readFile(filePath, 'utf8');
+        return { filePath, content, isNew: false };
+      } catch {
+        if (isCreateOrOverwrite) {
+          return { filePath, content: '', isNew: true };
+        }
+        return { filePath, content: null, isNew: false, readError: true };
       }
+    })
+  );
+
+  for (const { filePath, content, isNew, readError } of readResults) {
+    if (readError) {
+      return {
+        content: [{
+          type: 'text',
+          text: `✗ Could not read file: ${filePath}\nIf you're creating a new file, omit oldContent entirely.`,
+        }],
+        isError: true,
+      };
     }
+    fileContents.set(filePath, content);
+    if (isNew) isNewFile.add(filePath);
   }
 
   // 3. Apply all edits to in-memory copies
@@ -252,12 +261,11 @@ async function handler({ edits, validate, stopOnFirstError }) {
     if (aborted) break;
 
     for (const edit of editsForFile) {
-      const isCreate   = edit.oldContent === undefined || edit.oldContent === '';
+      const isCreate    = edit.oldContent === undefined || edit.oldContent === '';
       const isOverwrite = isCreate && (edit.overwrite === true || isNewFile.has(filePath));
 
       if (isCreate) {
         if (isOverwrite || isNewFile.has(filePath)) {
-          // Create new file or overwrite entire content
           modified.set(filePath, edit.newContent);
           results.push({ success: true, file: edit.file });
         } else {
@@ -286,7 +294,7 @@ async function handler({ edits, validate, stopOnFirstError }) {
     }
   }
 
-  // 4. Write files only if no failures (or partial writes when stopOnFirstError is false)
+  // 4. Write changed files in parallel
   const failures = results.filter(r => !r.success);
   if (failures.length === 0 || !stopOnFirstError) {
     const filesToWrite = stopOnFirstError
@@ -295,12 +303,14 @@ async function handler({ edits, validate, stopOnFirstError }) {
           path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file)
         ))];
 
-    for (const filePath of filesToWrite) {
-      if (modified.get(filePath) !== fileContents.get(filePath) || isNewFile.has(filePath)) {
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, modified.get(filePath), 'utf8');
-      }
-    }
+    await Promise.all(
+      filesToWrite
+        .filter(fp => modified.get(fp) !== fileContents.get(fp) || isNewFile.has(fp))
+        .map(async fp => {
+          await fs.mkdir(path.dirname(fp), { recursive: true });
+          await fs.writeFile(fp, modified.get(fp), 'utf8');
+        })
+    );
   }
 
   // 5. Run validation if all edits succeeded
