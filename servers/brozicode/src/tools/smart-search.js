@@ -9,6 +9,10 @@ import fg from 'fast-glob';
 // Each entry: { mtime: number, content: string, skeletons: Map<optKey, skeletonResult> }
 const fileCache = new Map();
 
+// P3: Tracks files already returned to Claude's context this session.
+// Prevents re-injecting unchanged file content and refilling the context window.
+const returnedFiles = new Map(); // fp → { mtime: number, isoTime: string }
+
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
 function parseFile(code, filePath) {
@@ -468,7 +472,9 @@ async function handler({
   if (output_mode === 'file_paths_only') {
     let paths = validEntries.map(e => e.fp).sort();
     if (file_limit > 0 && paths.length > file_limit) paths = paths.slice(0, file_limit);
-    return { content: [{ type: 'text', text: paths.join('\n') || 'No files matched.' }] };
+    // P2: TOON — relative paths, no padding
+    const text = paths.map(p => relativize(p, projectDir)).join('\n');
+    return { content: [{ type: 'text', text: text || 'No files matched.' }] };
   }
 
   // 4. Apply file_limit and sort for stable output
@@ -493,7 +499,7 @@ async function handler({
 
   for (const entry of readResults) {
     if (!entry) continue;
-    const { fp, content } = entry;
+    const { fp, content, mtime } = entry;
 
     // Split lines once per file — reused across all processing paths below
     const contentLines = content.split('\n');
@@ -533,6 +539,8 @@ async function handler({
             cEntry?.skeletons?.set(optKey, skeleton);
           }
           section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
+          // Record full-file skeleton returns for stale detection
+          if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
@@ -557,11 +565,24 @@ async function handler({
       section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? 'es' : ''})\n${ctx.text}`;
 
     } else {
+      // P3: Stale-read detection — if this file was already returned this session and
+      // hasn't changed on disk, substitute a compact reference instead of re-injecting
+      // the full content. Saves the entire file's token cost on repeated reads.
+      if (lineStart === null && !useContext && returnedFiles.has(fp)) {
+        const prev = returnedFiles.get(fp);
+        if (prev.mtime === mtime) {
+          section =
+            `### ${relativize(fp, projectDir)}\n` +
+            `[in-context — unchanged since ${prev.isoTime}. ` +
+            `Skip: if_modified_since:"${prev.isoTime}" | Slice: #N-M | Skeleton: summary:true]`;
+        }
+      }
+
       // Plain content mode — but auto-skeleton large JS/TS files with no explicit range.
       // Without this gate a 2500-line file returns ~90KB raw, exceeds Claude Code's
       // internal MCP token buffer, gets saved to disk, and triggers an expensive
       // chunk-read subagent spiral (observed cost: ~57k tokens on a single file).
-      if (isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+      if (!section && isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
         try {
           const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
           const cEntry = fileCache.get(fp);
@@ -574,6 +595,8 @@ async function handler({
           }
           const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
           section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
+          // Record this auto-skeleton return for stale detection
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
           // skeleton failed — fall through to plain truncated output
         }
@@ -589,6 +612,10 @@ async function handler({
         }
         const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
         section = `### ${relativize(fp, projectDir)}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
+        // Record full-file plain returns for stale detection
+        if (lineStart === null && !useContext) {
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+        }
       }
     }
 
@@ -618,16 +645,17 @@ async function handler({
     if (matchCounts.length === 0) {
       return { content: [{ type: 'text', text: 'No files matched.' }] };
     }
+    // P2: TOON format — relpath:count, no padding, relative paths
     const text = matchCounts
       .sort((a, b) => b.matchCount - a.matchCount)
-      .map(({ fp, matchCount }) => `${String(matchCount).padStart(5)}  ${fp}`)
+      .map(({ fp, matchCount }) => `${relativize(fp, projectDir)}:${matchCount}`)
       .join('\n');
     return { content: [{ type: 'text', text: text }] };
   }
 
   if (skippedFiles.length > 0) {
     sections.push(
-      `⚠ ${skippedFiles.length} file(s) omitted — response exceeded 400KB limit: ${skippedFiles.join(', ')}\n` +
+      `⚠ ${skippedFiles.length} file(s) omitted — response exceeded 150KB limit: ${skippedFiles.join(', ')}\n` +
       `  Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
     );
   }
@@ -644,25 +672,7 @@ async function handler({
 export function registerSmartSearch(server) {
   server.tool(
     'brozi_smart_search',
-    `Multi-file search, read, and AST-summary tool. Replaces grep + cat + glob.
-
-Params:
-  file_glob_patterns  – array of glob strings. Append #N-M to read only those lines.
-                        e.g. ["src/**/*.ts", "src/utils.ts#10-40"]
-  content_regex       – only return files whose content matches this regex (grep-style)
-  output_mode         – "file_paths_with_content" (default) | "file_paths_only" | "file_paths_with_match_count"
-  summary             – true → return JS/TS AST skeleton instead of raw content
-  if_modified_since   – ISO timestamp; skip files not modified after this date
-  type                – extension filter: "ts", "js", "sql", etc.
-  file_limit          – max number of files to process (0 = unlimited)
-  lines_before        – context lines before each regex match (like grep -B)
-  lines_after         – context lines after each regex match (like grep -A)
-  lines_per_file      – max matching lines shown per file (0 = unlimited)
-  max_line_length     – truncate lines longer than this (0 = unlimited)
-  ignore_case         – case-insensitive regex matching
-  multiline           – multiline regex flag (^ and $ match line boundaries)
-
-Typical savings: read 20 files in one call instead of 20 sequential Reads.`,
+    'glob+grep+read+AST in one call. Replaces Read/Grep/Glob. Append #N-M to globs for line ranges. Large JS/TS files auto-skeletonized. Repeated full-file reads return compact in-context notice.',
     {
       file_glob_patterns: z.array(z.string()).min(1)
         .describe('Glob patterns to match files. Append #N-M to limit to a line range.'),

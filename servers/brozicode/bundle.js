@@ -42922,6 +42922,7 @@ var import_fast_glob = __toESM(require_out4(), 1);
 import { promises as fs2 } from "fs";
 import path2 from "path";
 var fileCache = /* @__PURE__ */ new Map();
+var returnedFiles = /* @__PURE__ */ new Map();
 function parseFile(code, filePath) {
   const ext = path2.extname(filePath).slice(1).toLowerCase();
   const plugins = [
@@ -43301,7 +43302,8 @@ async function handler2({
   if (output_mode === "file_paths_only") {
     let paths = validEntries.map((e) => e.fp).sort();
     if (file_limit > 0 && paths.length > file_limit) paths = paths.slice(0, file_limit);
-    return { content: [{ type: "text", text: paths.join("\n") || "No files matched." }] };
+    const text = paths.map((p) => relativize(p, projectDir)).join("\n");
+    return { content: [{ type: "text", text: text || "No files matched." }] };
   }
   let readResults = validEntries;
   if (file_limit > 0 && readResults.length > file_limit) {
@@ -43316,7 +43318,7 @@ async function handler2({
   const skippedFiles = [];
   for (const entry of readResults) {
     if (!entry) continue;
-    const { fp, content } = entry;
+    const { fp, content, mtime } = entry;
     const contentLines = content.split("\n");
     let matchCount = 0;
     if (contentRe) {
@@ -43346,6 +43348,7 @@ async function handler2({
           }
           section = `### ${relativize(fp, projectDir)}${rangeLabel}
 ${buildResponse2(fp, skeleton, projectDir)}`;
+          if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${relativize(fp, projectDir)}${rangeLabel}
@@ -43370,7 +43373,14 @@ ${sliced.join("\n")}`;
       section = `### ${relativize(fp, projectDir)}  (${ctx.matchCount} match${ctx.matchCount !== 1 ? "es" : ""})
 ${ctx.text}`;
     } else {
-      if (isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+      if (lineStart === null && !useContext && returnedFiles.has(fp)) {
+        const prev = returnedFiles.get(fp);
+        if (prev.mtime === mtime) {
+          section = `### ${relativize(fp, projectDir)}
+[in-context \u2014 unchanged since ${prev.isoTime}. Skip: if_modified_since:"${prev.isoTime}" | Slice: #N-M | Skeleton: summary:true]`;
+        }
+      }
+      if (!section && isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
         try {
           const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
           const cEntry = fileCache.get(fp);
@@ -43384,6 +43394,7 @@ ${ctx.text}`;
           const note = `\u26A1auto-skeleton (${contentLines.length} lines \u2014 add summary:true or a #N-M range to silence this)`;
           section = `### ${relativize(fp, projectDir)} ${note}
 ${buildResponse2(fp, skeleton, projectDir)}`;
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
         }
       }
@@ -43397,6 +43408,9 @@ ${buildResponse2(fp, skeleton, projectDir)}`;
         const lineInfo = lineStart !== null ? ` (lines ${lineStart}\u2013${lineEnd})` : "";
         section = `### ${relativize(fp, projectDir)}${lineInfo}
 ${addLineNumbers(fileLines, lineStart ?? 1)}`;
+        if (lineStart === null && !useContext) {
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+        }
       }
     }
     if (responseSize + section.length > MAX_RESPONSE_BYTES) {
@@ -43423,12 +43437,12 @@ ${buildResponse2(fp, skeleton, projectDir)}`;
     if (matchCounts.length === 0) {
       return { content: [{ type: "text", text: "No files matched." }] };
     }
-    const text = matchCounts.sort((a, b) => b.matchCount - a.matchCount).map(({ fp, matchCount }) => `${String(matchCount).padStart(5)}  ${fp}`).join("\n");
+    const text = matchCounts.sort((a, b) => b.matchCount - a.matchCount).map(({ fp, matchCount }) => `${relativize(fp, projectDir)}:${matchCount}`).join("\n");
     return { content: [{ type: "text", text }] };
   }
   if (skippedFiles.length > 0) {
     sections.push(
-      `\u26A0 ${skippedFiles.length} file(s) omitted \u2014 response exceeded 400KB limit: ${skippedFiles.join(", ")}
+      `\u26A0 ${skippedFiles.length} file(s) omitted \u2014 response exceeded 150KB limit: ${skippedFiles.join(", ")}
   Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
     );
   }
@@ -43440,25 +43454,7 @@ ${buildResponse2(fp, skeleton, projectDir)}`;
 function registerSmartSearch(server2) {
   server2.tool(
     "brozi_smart_search",
-    `Multi-file search, read, and AST-summary tool. Replaces grep + cat + glob.
-
-Params:
-  file_glob_patterns  \u2013 array of glob strings. Append #N-M to read only those lines.
-                        e.g. ["src/**/*.ts", "src/utils.ts#10-40"]
-  content_regex       \u2013 only return files whose content matches this regex (grep-style)
-  output_mode         \u2013 "file_paths_with_content" (default) | "file_paths_only" | "file_paths_with_match_count"
-  summary             \u2013 true \u2192 return JS/TS AST skeleton instead of raw content
-  if_modified_since   \u2013 ISO timestamp; skip files not modified after this date
-  type                \u2013 extension filter: "ts", "js", "sql", etc.
-  file_limit          \u2013 max number of files to process (0 = unlimited)
-  lines_before        \u2013 context lines before each regex match (like grep -B)
-  lines_after         \u2013 context lines after each regex match (like grep -A)
-  lines_per_file      \u2013 max matching lines shown per file (0 = unlimited)
-  max_line_length     \u2013 truncate lines longer than this (0 = unlimited)
-  ignore_case         \u2013 case-insensitive regex matching
-  multiline           \u2013 multiline regex flag (^ and $ match line boundaries)
-
-Typical savings: read 20 files in one call instead of 20 sequential Reads.`,
+    "glob+grep+read+AST in one call. Replaces Read/Grep/Glob. Append #N-M to globs for line ranges. Large JS/TS files auto-skeletonized. Repeated full-file reads return compact in-context notice.",
     {
       file_glob_patterns: external_exports.array(external_exports.string()).min(1).describe("Glob patterns to match files. Append #N-M to limit to a line range."),
       content_regex: external_exports.string().optional().describe("Filter: only include files whose content matches this regex."),
@@ -43577,7 +43573,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.6.1"
+  version: "0.7.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

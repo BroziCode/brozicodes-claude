@@ -31,7 +31,7 @@ for (const [event, entries] of Object.entries(h.hooks)) {
 Format as a concise status block matching this shape (hook list is dynamic — do not hardcode it):
 
 ```
-brozicode-server v0.6.0
+brozicode-server v0.7.0
     tools:    brozi_batch_edit, brozi_smart_search, brozi_run
     bundle:   .../servers/brozicode/bundle.js
     hooks:    SessionStart → session-tracker.js init, session-start-repo-map.js

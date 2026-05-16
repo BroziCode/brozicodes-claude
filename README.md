@@ -45,6 +45,9 @@ Combined file discovery, grep, and reading in one call. Supports:
 - `#N-M` line-range suffix for targeted reads
 - `if_modified_since` caching — skip unchanged files
 - In-process file cache — zero disk I/O on repeated reads within a session
+- **Stale-read detection** — re-reads of unchanged files return a compact one-line notice instead of full content
+- **Auto-skeleton gate** — JS/TS files >300 lines without a line range are auto-skeletonized (prevents token spirals)
+- **TOON output** — `file_paths_only` and `file_paths_with_match_count` use compact `relpath:count` format (~70% smaller)
 - `lines_before` / `lines_after` context around matches
 - `type`, `file_limit`, `max_line_length` controls
 - Compact response headers with relative paths
@@ -74,8 +77,11 @@ BroziCode installs Claude Code hooks that activate automatically every session:
 After each session, BroziCode prints:
 
 ```
- brozicode · session saved: ~$5.58 · 2.9k tokens · 17 roundtrips  [7× batch-edit, 3× smart-search, 2× run]
+ brozicode · ~$5.58 saved · 2.9k tokens (input+output est.) · 17 roundtrips  [7× batch-edit, 3× smart-search, 2× run]
 ```
+
+The dollar estimate accounts for both input tokens avoided and their downstream output reduction
+(Sonnet pricing: $3/M input + conservative 15% output multiplier at $15/M).
 
 ## Using the brozicode agent
 
@@ -117,7 +123,30 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
+**v0.7.0**
+
+### Changelog
+
+**v0.7.0**
+- **Stale-read detection** — re-reads of unchanged files (same mtime) return a compact in-context notice; no repeated token spend on unmodified sources
+- **Auto-skeleton gate** — JS/TS files >300 lines without a `#N-M` range are automatically skeletonized; prevents the 50k+ token spiral from large raw file dumps
+- **TOON output encoding** — `file_paths_only` and `file_paths_with_match_count` modes now emit compact `relpath:count` lines (~70% smaller than padded absolute paths)
+- **Compressed tool schemas** — all Zod `.describe()` strings tightened; saves ~250 tokens per API call across 3 tools
+- **Effective tokens metric** — savings display now estimates output token impact (input+output combined); dollar estimate uses $3/M input + 15% output multiplier
+- **Better match errors** — `brozi_batch_edit` match failures now include the actual file content window as a copy-pasteable corrected `oldContent`
+- **Skipped-edit reporting** — when `stopOnFirstError` halts a batch, remaining edits are explicitly listed as "NOT attempted — resubmit ENTIRE batch"
+
 **v0.6.1**
+- Fixed `brozi_batch_edit` silently dropping edits: match errors now include the nearest file content as corrected `oldContent`
+- Fixed 57k token spiral: added `MAX_FILE_LINES_RAW = 300` gate + lowered response cap to 150KB
+
+**v0.6.0**
+- Added `brozi_run` tool for compressed shell command output
+- PostToolUse response rewriter (Bash + Read)
+- In-process file cache (zero disk I/O on repeated reads)
+- PreToolUse hard block on native Read/Grep/Glob
+- PreCompact snapshot + PostCompact re-anchor hooks
+- SessionStart PageRank repo map
 
 ## License
 

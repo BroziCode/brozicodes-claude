@@ -119,7 +119,7 @@ process.stdin.on('end', () => {
         savings.smartSearchCalls > 0 && `${savings.smartSearchCalls}× smart-search`,
         runCalls                > 0 && `${runCalls}× run`,
       ].filter(Boolean).join(', ');
-      let line = `\n brozicode · session saved: ~${dollarEst} · ${(tokens / 1000).toFixed(1)}k tokens · ${roundtrips} roundtrips`;
+      let line = `\n brozicode · ~${dollarEst} saved · ${(tokens / 1000).toFixed(1)}k tokens (input+output est.) · ${roundtrips} roundtrips`;
       line    += `  [${toolSummary || 'no brozi tool calls'}]`;
       if (fallbacks > 0) line += `  ⚠ ${fallbacks} native fallback${fallbacks !== 1 ? 's' : ''} (${compliance}% compliance)`;
       process.stdout.write(line + '\n\n');

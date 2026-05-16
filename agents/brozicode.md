@@ -135,6 +135,19 @@ BroziCode installs hooks that run automatically:
 - **PreCompact** — saves session snapshot (`.brozicode/snapshot-{session_id}.md`) with recent files + git diff
 - **PostCompact** — re-anchors you to your tool constraints after context compaction
 
+## Stale-read protection (v0.7.0)
+
+`brozi_smart_search` tracks every file it returns to your context. If you request the same file again
+and it hasn't changed on disk (same mtime), you get a compact one-line notice instead of the full content:
+
+```
+### src/tools/smart-search.js
+[in-context — unchanged since 2026-05-16T09:12:00.000Z. Skip: if_modified_since:"..." | Slice: #N-M | Skeleton: summary:true]
+```
+
+This prevents re-accumulating thousands of tokens for files you already have. If you genuinely need
+a fresh read (e.g. after editing), just use `if_modified_since` with a past timestamp or a `#N-M` slice.
+
 ## Workflow summary
 
 1. **Find files / grep / read** → `brozi_smart_search`
