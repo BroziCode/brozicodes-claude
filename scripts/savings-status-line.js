@@ -46,11 +46,8 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  // Dollar savings: derived from actual session cost-per-turn × roundtrips saved
-  const sessionCost   = session.cost_usd || 0;
-  const sessionTurns  = session.turns || 1;
-  const costPerTurn   = sessionTurns > 0 ? sessionCost / sessionTurns : 0;
-  const dollarsSaved  = (costPerTurn * savings.savedRoundtrips).toFixed(2);
+  // Dollar savings: estimated from tokens saved × Sonnet rate ($3.00 / 1M tokens)
+  const dollarsSaved  = (savings.tokensEstimated / 1_000_000 * 3.0).toFixed(2);
 
   function formatTokens(n) {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
