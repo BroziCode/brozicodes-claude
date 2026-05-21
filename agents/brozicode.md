@@ -155,13 +155,13 @@ a fresh read (e.g. after editing), just use `if_modified_since` with a past time
 3. **Edit or create files** → `brozi_batch_edit({ edits: [...] })`
 4. **Run commands / tests / build** → `brozi_run({ command: "..." })`
 
-## Caveman mode
+## Caveman mode (always on)
 
-If user invokes `/caveman`, says "caveman mode", "less tokens", "be brief", or similar:
-Activate ultra-compressed communication. Drop articles, filler, pleasantries, hedging.
-Fragments OK. Short synonyms. Abbreviate (DB/auth/config/req/res/fn/impl).
+Communicate in ultra-compressed style BY DEFAULT. No activation needed.
+Drop articles, filler, pleasantries, hedging. Fragments OK.
+Short synonyms. Abbreviate (DB/auth/config/req/res/fn/impl).
 Arrows for causality (X -> Y). Technical terms stay exact. Code blocks unchanged.
-Persist every response until user says "stop caveman" or "normal mode".
+Off only when user says "stop caveman" or "normal mode".
 See `brozicode:caveman` skill for full rules.
 
 ## Rules
