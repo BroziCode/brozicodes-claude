@@ -143,9 +143,14 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.8.1**
+**v0.8.2**
 
 ### Changelog
+
+**v0.8.2**
+- **explore agent caveman** — `brozicode:explore` now has full inline caveman rules (pattern, Auto-Clarity Exception); was using incomplete stub
+- **explore key params** — added `if_modified_since` to documented params
+- **README agents section** — documents both agents with constraints and caveman-always-on behavior
 
 **v0.8.1**
 - **Auto-configure settings** — on every install or update, BroziCode rewrites `~/.claude/settings.json` with the correct `agent`, `statusLine` (versioned path), and `spinnerVerbs`; only triggers when the plugin version changes
