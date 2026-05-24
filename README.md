@@ -10,7 +10,7 @@ agentic loops with Macro-tools — cutting API round-trips from 12 to 2 on compl
 Open Claude Code and run:
 
 ```
-/plugin marketplace add broziden/brozicodes-claude
+/plugin marketplace add BroziCode/brozicodes-claude
 /plugin install brozicode@brozicode-marketplace
 ```
 
@@ -66,7 +66,7 @@ BroziCode installs Claude Code hooks that activate automatically every session:
 
 | Hook | Trigger | Action |
 |---|---|---|
-| SessionStart | session open | init savings tracking + build repo map (`.brozicode/repo-map.md`) |
+| SessionStart | session open | auto-configure `~/.claude/settings.json` on version change; init savings tracking + build repo map (`.brozicode/repo-map.md`) |
 | PreToolUse | `Read\|Grep\|Glob` | **hard block** — outputs targeted `brozi_smart_search` alternative |
 | PostToolUse | `Bash\|Read` | rewrite: strip ANSI, truncate (100/200 lines), preserve errors |
 | PreCompact | compaction | snapshot recent files + git diff → `.brozicode/snapshot-{id}.md` |
@@ -94,13 +94,14 @@ claude --agent brozicode:brozicode
 ```
 Every task in that session routes through the brozicode agent.
 
-**2. Global default — `~/.claude/settings.json`**
-```json
-{
-  "defaultAgent": "brozicode:brozicode"
-}
-```
-Every `claude` session on your machine uses brozicode by default.
+**2. Global default — auto-configured on install/update**
+
+BroziCode automatically writes `~/.claude/settings.json` on every install or version update, setting:
+- `agent: brozicode:brozicode` as the default
+- `statusLine` pointing to the installed version's status script
+- `spinnerVerbs` with BroziCode-flavoured messages
+
+No manual config needed. Re-runs whenever the plugin version changes.
 
 **3. Per-project — `CLAUDE.md`**
 ```markdown
@@ -123,9 +124,23 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.7.0**
+**v0.8.1**
 
 ### Changelog
+
+**v0.8.1**
+- **Auto-configure settings** — on every install or update, BroziCode rewrites `~/.claude/settings.json` with the correct `agent`, `statusLine` (versioned path), and `spinnerVerbs`; only triggers when the plugin version changes
+- **BroziCode spinnerVerbs** — replaces default Claude spinner text with BroziCode-flavoured messages
+- **Versioned statusLine path** — status line command resolves to the newest versioned cache dir automatically
+
+**v0.8.0**
+- **Caveman mode always-on** — ultra-compressed communication style active by default across all BroziCode agents (~75% token reduction in responses)
+
+**v0.7.2**
+- Added `brozicode:caveman` skill for explicit caveman mode toggle
+
+**v0.7.1**
+- Fixed cost estimate always showing $0.00 in status line
 
 **v0.7.0**
 - **Stale-read detection** — re-reads of unchanged files (same mtime) return a compact in-context notice; no repeated token spend on unmodified sources
