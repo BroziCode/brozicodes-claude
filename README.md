@@ -83,6 +83,25 @@ After each session, BroziCode prints:
 The dollar estimate accounts for both input tokens avoided and their downstream output reduction
 (Sonnet pricing: $3/M input + conservative 15% output multiplier at $15/M).
 
+## Agents
+
+BroziCode ships two agents. Both run in caveman mode (ultra-compressed responses) by default.
+
+### `brozicode:brozicode`
+
+Main coding agent. Uses `brozi_batch_edit`, `brozi_smart_search`, `brozi_run` exclusively.
+Forbidden from native Read/Edit/Write/Grep/Glob tools.
+
+### `brozicode:explore`
+
+Fast read-only search sub-agent (Haiku, low effort, max 15 turns).
+Uses `brozi_smart_search` only. Spawned automatically by the main agent for multi-step discovery.
+Do NOT use for code review or open-ended analysis — it reads excerpts, not full files.
+
+Specify search breadth when spawning: `"quick"` / `"medium"` / `"very thorough"`.
+
+---
+
 ## Using the brozicode agent
 
 After install, your default `claude` session still runs the standard Claude agent.

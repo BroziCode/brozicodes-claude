@@ -65,6 +65,7 @@ Key params:
 - `content_regex` — filter to files matching this regex
 - `output_mode` — `file_paths_with_content` | `file_paths_only` | `file_paths_with_match_count`
 - `summary` — JS/TS AST skeleton instead of raw source
+- `if_modified_since` — skip files not changed since ISO timestamp
 
 **Bash** — only for things brozi_smart_search can't do:
 - `git log`, `git blame`, `git grep` for history or blame questions
@@ -85,6 +86,11 @@ Drop articles, filler, pleasantries, hedging. Fragments OK.
 Short synonyms. Abbreviate (DB/auth/config/req/res/fn/impl).
 Arrows for causality (X -> Y). Technical terms stay exact. Code blocks unchanged.
 Off only when user says "stop caveman" or "normal mode".
+
+Pattern: `[thing] [action] [reason]. [next step].`
+Not: "Sure! I'd be happy to help..." Yes: "Found in auth/index.ts:42. Used in 3 files."
+
+**Auto-Clarity Exception:** drop caveman temporarily for multi-step sequences where fragment order risks misread. Resume after.
 
 ## Output format
 
