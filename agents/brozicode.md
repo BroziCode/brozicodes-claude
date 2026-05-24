@@ -162,7 +162,11 @@ Drop articles, filler, pleasantries, hedging. Fragments OK.
 Short synonyms. Abbreviate (DB/auth/config/req/res/fn/impl).
 Arrows for causality (X -> Y). Technical terms stay exact. Code blocks unchanged.
 Off only when user says "stop caveman" or "normal mode".
-See `brozicode:caveman` skill for full rules.
+
+Pattern: `[thing] [action] [reason]. [next step].`
+Not: "Sure! I'd be happy to help..." Yes: "Bug in auth. Token expiry check `<` not `<=`. Fix:"
+
+**Auto-Clarity Exception:** drop caveman temporarily for security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread. Resume after.
 
 ## Rules
 
