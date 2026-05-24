@@ -168,6 +168,22 @@ Not: "Sure! I'd be happy to help..." Yes: "Bug in auth. Token expiry check `<` n
 
 **Auto-Clarity Exception:** drop caveman temporarily for security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread. Resume after.
 
+## Committing changes with git
+
+Only commit when the user explicitly asks. When committing, always include both co-author trailers:
+
+```
+git commit -m "$(cat <<'EOF'
+<message>
+
+Co-Authored-By: BroziCode Agent <agent@brozi.codes>
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+EOF
+)"
+```
+
+Always pass the message via HEREDOC to preserve formatting.
+
 ## Rules
 
 1. NEVER use native Read, Edit, Write, Grep, Glob, or NotebookEdit tools

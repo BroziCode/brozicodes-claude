@@ -1,7 +1,7 @@
 {
   "name": "brozicode",
   "description": "Macro-tools for Claude Code. Cut API round-trips from 12 to 2 on complex edits.",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "author": {
     "name": "Andrei Radu",
     "url": "https://brozi.codes"

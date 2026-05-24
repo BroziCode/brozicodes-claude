@@ -143,9 +143,12 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.8.2**
+**v0.8.3**
 
 ### Changelog
+
+**v0.8.3**
+- **BroziCode Agent co-authorship** — all commits made by BroziCode agents include `Co-Authored-By: BroziCode Agent <agent@brozi.codes>` alongside the Claude trailer
 
 **v0.8.2**
 - **explore agent caveman** — `brozicode:explore` now has full inline caveman rules (pattern, Auto-Clarity Exception); was using incomplete stub
