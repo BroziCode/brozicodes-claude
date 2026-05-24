@@ -43241,7 +43241,8 @@ async function handler2({
   multiline,
   includeImports,
   includeTypes,
-  includePrivate
+  includePrivate,
+  relevance_threshold
 }) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const sinceMs = if_modified_since ? new Date(if_modified_since).getTime() : null;
@@ -43328,6 +43329,10 @@ async function handler2({
       matchCount = allMatches.length;
     }
     matchCounts.push({ fp, matchCount });
+    if (relevance_threshold > 0 && contentRe && matchCount > 0) {
+      const density = matchCount / Math.max(1, contentLines.length);
+      if (density < relevance_threshold) continue;
+    }
     if (output_mode === "file_paths_with_match_count") continue;
     const { lineStart, lineEnd } = fileLineRanges.get(fp);
     const rangeLabel = lineStart !== null ? `#${lineStart}-${lineEnd}` : "";
@@ -43471,7 +43476,8 @@ function registerSmartSearch(server2) {
       multiline: external_exports.boolean().default(false).describe("Multiline flag \u2014 ^ and $ match line boundaries."),
       includeImports: external_exports.boolean().default(true).describe("(summary mode) Include import statements in skeleton."),
       includeTypes: external_exports.boolean().default(true).describe("(summary mode) Include TS type/interface definitions in skeleton."),
-      includePrivate: external_exports.boolean().default(false).describe("(summary mode) Include private class members in skeleton.")
+      includePrivate: external_exports.boolean().default(false).describe("(summary mode) Include private class members in skeleton."),
+      relevance_threshold: external_exports.number().min(0).max(1).default(0).describe("Min match density (matches \xF7 total lines) to include a file. 0 = disabled. E.g. 0.02 = skip files where <2% of lines match content_regex.")
     },
     handler2
   );
@@ -43489,6 +43495,20 @@ var ERROR_RE = /error\s*TS\d+|^\s*(Error|TypeError|SyntaxError|ReferenceError|Wa
 function isErrorLine(line) {
   return ERROR_RE.test(line);
 }
+var outputStore = /* @__PURE__ */ new Map();
+var OUTPUT_STORE_MAX = 50;
+var STORE_THRESHOLD = 100;
+function cmdKey(cmd) {
+  let h = 0;
+  for (let i = 0; i < cmd.length; i++) h = (h << 5) - h + cmd.charCodeAt(i) | 0;
+  return Math.abs(h).toString(36);
+}
+function storeOutput(key, command, lines) {
+  if (outputStore.size >= OUTPUT_STORE_MAX) {
+    outputStore.delete(outputStore.keys().next().value);
+  }
+  outputStore.set(key, { command, lines, storedAt: Date.now() });
+}
 function compressOutput(text, maxLines, keepErrors) {
   const lines = text.split("\n");
   if (lines.length <= maxLines) return text;
@@ -43505,54 +43525,136 @@ function compressOutput(text, maxLines, keepErrors) {
   }
   return result;
 }
-async function handler3({ command, keep_errors, max_lines, strip_ansi }) {
+async function handler3({ command, keep_errors, max_lines, strip_ansi, query }) {
   const startMs = Date.now();
+  const key = cmdKey(command);
+  if (query !== void 0 && query !== "") {
+    const stored = outputStore.get(key);
+    if (!stored) {
+      return {
+        content: [{
+          type: "text",
+          text: `No stored output for: ${command}
+Run brozi_run({ command: "..." }) first to capture output, then query it.`
+        }]
+      };
+    }
+    let re;
+    try {
+      re = new RegExp(query, "gi");
+    } catch {
+      return { content: [{ type: "text", text: `Invalid regex: ${query}` }] };
+    }
+    const { lines } = stored;
+    const matchIdxs = lines.reduce((acc, line, i) => {
+      re.lastIndex = 0;
+      if (re.test(line)) acc.push(i);
+      return acc;
+    }, []);
+    if (matchIdxs.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: `No matches for "${query}" in stored output (${lines.length} lines from: ${command}).`
+        }]
+      };
+    }
+    const shown = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const i of matchIdxs) {
+      for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++) {
+        if (!shown.has(j)) {
+          shown.add(j);
+          out.push(`${String(j + 1).padStart(4)}: ${lines[j]}`);
+        }
+      }
+      out.push("  \u2500\u2500\u2500");
+    }
+    if (out[out.length - 1] === "  \u2500\u2500\u2500") out.pop();
+    return {
+      content: [{
+        type: "text",
+        text: `$ ${command}  [stored, ${matchIdxs.length} match${matchIdxs.length !== 1 ? "es" : ""} for "${query}"]
+` + out.join("\n")
+      }]
+    };
+  }
   try {
     const { stdout, stderr } = await execAsync2(command, {
       cwd: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
       shell: true,
       maxBuffer: 10 * 1024 * 1024,
-      // 10 MB
       timeout: 6e4
     });
     let combined = "";
     if (stdout) combined += stdout;
     if (stderr) combined += (combined ? "\n" : "") + stderr;
     if (strip_ansi) combined = stripAnsi(combined);
-    combined = compressOutput(combined.trimEnd(), max_lines, keep_errors);
+    const allLines = combined.trimEnd().split("\n");
     const elapsed = Date.now() - startMs;
+    if (allLines.length > STORE_THRESHOLD) {
+      storeOutput(key, command, allLines);
+      const errorLines = allLines.filter(isErrorLine).slice(0, 20);
+      let summary = `$ ${command}  [${elapsed}ms \u2014 ${allLines.length} lines intercepted, not in context]
+`;
+      summary += allLines.slice(0, 30).join("\n");
+      if (allLines.length > 30) {
+        summary += `
+  \u2026 [${allLines.length - 30} lines stored \u2014 query with brozi_run({ command, query: "pattern" })]`;
+      }
+      if (errorLines.length > 0) {
+        summary += `
+
+  \u2500\u2500 Errors/warnings (${errorLines.length}) \u2500\u2500
+` + errorLines.join("\n");
+      }
+      summary += `
+
+  \u2500\u2500 Query stored output \u2500\u2500`;
+      summary += `
+  brozi_run({ command: "${command.slice(0, 60)}", query: "your pattern" })`;
+      return { content: [{ type: "text", text: summary }] };
+    }
+    const text = compressOutput(combined.trimEnd(), max_lines, keep_errors);
     return {
       content: [{ type: "text", text: `$ ${command}  [${elapsed}ms]
-${combined || "(no output)"}` }]
+${text || "(no output)"}` }]
     };
   } catch (err) {
     let out = (err.stdout || "") + (err.stdout && err.stderr ? "\n" : "") + (err.stderr || err.message || String(err));
     if (strip_ansi) out = stripAnsi(out);
-    out = compressOutput(out.trimEnd(), max_lines, keep_errors);
+    const allLines = out.trimEnd().split("\n");
+    if (allLines.length > STORE_THRESHOLD) storeOutput(key, command, allLines);
+    const text = compressOutput(out.trimEnd(), max_lines, keep_errors);
     const elapsed = Date.now() - startMs;
     return {
       content: [{ type: "text", text: `$ ${command}  [${elapsed}ms, exit ${err.code ?? 1}]
-${out || "(no output)"}` }]
+${text || "(no output)"}` }]
     };
   }
 }
 function registerRun(server2) {
   server2.tool(
     "brozi_run",
-    `Run a shell command and return compressed, ANSI-stripped output. Replaces Bash
-when you only need a clean summary \u2014 not full verbose output.
+    `Run a shell command. Outputs >100 lines are intercepted into a process-level store
+(never injected into context). Returns first 30 lines + all error lines + a query hint.
+Query the stored output with the query param to fetch only relevant sections.
 
 Params:
-  command      \u2013 shell command to run (runs in CLAUDE_PROJECT_DIR)
-  keep_errors  \u2013 preserve error/warning lines even when truncating (default: true)
-  max_lines    \u2013 maximum output lines to return (default: 50)
-  strip_ansi   \u2013 remove ANSI color escape codes (default: true)
+  command      \u2013 shell command (runs in CLAUDE_PROJECT_DIR)
+  query        \u2013 regex to search stored output for this command (run without query first)
+  keep_errors  \u2013 preserve error/warning lines when truncating small outputs (default: true)
+  max_lines    \u2013 max lines to return for small outputs <100 lines (default: 50)
+  strip_ansi   \u2013 remove ANSI escape codes (default: true)
 
-Typical savings: npm test output 800 lines \u2192 50 lines with all failures preserved.`,
+Two-step pattern for large outputs:
+  1. brozi_run({ command: "npm test" })                     \u2190 captures, returns summary
+  2. brozi_run({ command: "npm test", query: "FAIL|Error" }) \u2190 searches captured output`,
     {
       command: external_exports.string().describe("Shell command to execute."),
-      keep_errors: external_exports.boolean().default(true).describe("Keep error/warning lines when truncating."),
-      max_lines: external_exports.number().int().min(1).default(50).describe("Max output lines to return."),
+      query: external_exports.string().optional().describe("Regex to search stored output for this command. Run without query first to capture."),
+      keep_errors: external_exports.boolean().default(true).describe("Keep error/warning lines when truncating small outputs."),
+      max_lines: external_exports.number().int().min(1).default(50).describe("Max output lines for outputs under threshold."),
       strip_ansi: external_exports.boolean().default(true).describe("Strip ANSI escape codes from output.")
     },
     handler3
@@ -43573,7 +43675,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.7.0"
+  version: "0.8.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

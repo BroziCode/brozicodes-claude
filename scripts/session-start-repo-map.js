@@ -28,6 +28,17 @@ async function run() {
 
   fs.mkdirSync(outputDir, { recursive: true });
 
+  // ── 0. Skip if map is fresh (< 30 min) ──────────────────────────────────
+  try {
+    const stat  = fs.statSync(mapPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs < 30 * 60 * 1000) {
+      const ageMin = Math.round(ageMs / 60_000);
+      process.stdout.write(`BroziCode repo map cached (${ageMin}m old): ${mapPath}\n`);
+      process.exit(0);
+    }
+  } catch { /* map doesn't exist yet — proceed */ }
+
   // ── 1. Find all JS/TS source files ──────────────────────────────────────────
   let files = [];
   try {

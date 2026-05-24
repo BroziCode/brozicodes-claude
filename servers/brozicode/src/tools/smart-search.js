@@ -390,6 +390,7 @@ async function handler({
   includeImports,
   includeTypes,
   includePrivate,
+  relevance_threshold,
 }) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const sinceMs    = if_modified_since ? new Date(if_modified_since).getTime() : null;
@@ -514,6 +515,13 @@ async function handler({
     }
 
     matchCounts.push({ fp, matchCount });
+
+    // Relevance threshold — skip files below match density (matches / total lines)
+    if (relevance_threshold > 0 && contentRe && matchCount > 0) {
+      const density = matchCount / Math.max(1, contentLines.length);
+      if (density < relevance_threshold) continue;
+    }
+
     if (output_mode === 'file_paths_with_match_count') continue;
 
     // Apply line range
@@ -720,6 +728,9 @@ export function registerSmartSearch(server) {
         .describe('(summary mode) Include TS type/interface definitions in skeleton.'),
       includePrivate: z.boolean().default(false)
         .describe('(summary mode) Include private class members in skeleton.'),
+
+      relevance_threshold: z.number().min(0).max(1).default(0)
+        .describe('Min match density (matches ÷ total lines) to include a file. 0 = disabled. E.g. 0.02 = skip files where <2% of lines match content_regex.'),
     },
     handler
   );

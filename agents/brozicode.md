@@ -86,32 +86,38 @@ Key params:
 - `output_mode` — `file_paths_with_content` (default) | `file_paths_only` | `file_paths_with_match_count`
 - `summary` — JS/TS AST skeleton (signatures, exports) instead of raw source
 - `if_modified_since` — ISO timestamp; skip files not modified after this
+- `relevance_threshold` — min match density (0.0–1.0) to include a file; e.g. `0.02` = skip files where <2% of lines match. Use to cut noise when searching large codebases.
 
 For discovery tasks too complex for a single call, delegate to the `explore` sub-agent.
 
 ## Running commands: brozi_run
 
-**brozi_run** — Run a shell command and get compressed, ANSI-stripped output.
-Use instead of Bash when you only need a clean summary (test results, build output, lint).
+**brozi_run** — Run a shell command. Outputs >100 lines are **intercepted into a process-level
+store** and never injected into context. Returns first 30 lines + all error lines + a query hint.
+Use the `query` param to fetch only the relevant sections from stored output.
 
 ```js
-// Run tests and get only the failures (800-line output → 50 lines)
+// Step 1: capture (large output stored, not in context)
 brozi_run({ command: "npm test" })
 
-// Build and keep all TypeScript errors even if they're in the omitted section
-brozi_run({ command: "npm run build", keep_errors: true, max_lines: 80 })
+// Step 2: query stored output for what you need
+brozi_run({ command: "npm test", query: "FAIL|Error" })
 
-// Run any shell command in CLAUDE_PROJECT_DIR
+// Small outputs (<100 lines) returned directly as before
 brozi_run({ command: "git log --oneline -10" })
+
+// Build with TypeScript errors preserved
+brozi_run({ command: "npm run build", keep_errors: true, max_lines: 80 })
 ```
 
 Params:
 - `command` — shell command to run (cwd is `CLAUDE_PROJECT_DIR`)
-- `keep_errors` — preserve error/warning lines even when truncating (default: `true`)
-- `max_lines` — max output lines to return (default: `50`)
+- `query` — **regex** to search stored output for this command (run without `query` first)
+- `keep_errors` — preserve error/warning lines when truncating small outputs (default: `true`)
+- `max_lines` — max lines for small outputs under threshold (default: `50`)
 - `strip_ansi` — remove ANSI escape codes (default: `true`)
 
-Typical savings: 800-line test output → 50 lines with all failures preserved.
+Two-step pattern: run once to capture → query to retrieve. Never re-runs the command.
 
 ## Exploration: explore sub-agent
 
@@ -129,10 +135,11 @@ Agent({
 ## Session hooks (automatic)
 
 BroziCode installs hooks that run automatically:
-- **SessionStart** — initializes savings tracking + generates repo map (`.brozicode/repo-map.md`)
+- **SessionStart** — initializes savings tracking + generates repo map (`.brozicode/repo-map.md`); skips regeneration if map is <30 min old
+- **UserPromptSubmit** — tracks token consumption; warns at 50%/70%/90% of 150K session budget
 - **PreToolUse** `Read|Grep|Glob` — **hard blocks** native file tools; outputs a targeted `brozi_smart_search` alternative
 - **PostToolUse** `Bash|Read` — rewrites verbose output: strips ANSI, truncates to 100 lines (Bash) or 200 lines (Read), preserves error lines
-- **PreCompact** — saves session snapshot (`.brozicode/snapshot-{session_id}.md`) with recent files + git diff
+- **PreCompact** — saves tiered snapshot (`.brozicode/snapshot-{session_id}.md`): T1=git status+stats, T2=recent files, T3=restore command; **2K hard cap**
 - **PostCompact** — re-anchors you to your tool constraints after context compaction
 
 ## Stale-read protection (v0.7.0)
