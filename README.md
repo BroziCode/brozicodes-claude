@@ -143,9 +143,12 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.8.3**
+**v0.8.4**
 
 ### Changelog
+
+**v0.8.4**
+- **Update notifications** — on session start, BroziCode checks GitHub for newer versions (at most once per 24h) and prints a one-liner if an update is available: `⚡ Update available: vX.X.X → vY.Y.Y. Run: /plugin update brozicode`
 
 **v0.8.3**
 - **BroziCode Agent co-authorship** — all commits made by BroziCode agents include `Co-Authored-By: BroziCode Agent <agent@brozi.codes>` alongside the Claude trailer
