@@ -177,12 +177,12 @@ git commit -m "$(cat <<'EOF'
 <message>
 
 Co-Authored-By: BroziCode Agent <agent@brozi.codes>
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
 )"
 ```
 
 Always pass the message via HEREDOC to preserve formatting.
+NEVER add `Co-Authored-By: Claude` or any Anthropic/Claude trailer to commits.
 
 ## Rules
 
