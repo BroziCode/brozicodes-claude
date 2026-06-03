@@ -1,11 +1,12 @@
 {
   "name": "brozicode-server",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.js --bundle --platform=node --format=esm --outfile=bundle.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
     "test": "node test/skeleton.test.mjs && node test/batch-edit.test.mjs",
     "verify": "npm test && npm run build",
+    "bench": "node bench/e2e.mjs",
     "dev": "node --watch src/index.js"
   },
   "dependencies": {

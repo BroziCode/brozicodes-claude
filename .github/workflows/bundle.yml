@@ -6,6 +6,7 @@ on:
     paths:
       - 'servers/brozicode/src/**'
       - 'servers/brozicode/test/**'
+      - 'servers/brozicode/bench/**'
       - 'servers/brozicode/package.json'
 
 jobs:
@@ -27,6 +28,10 @@ jobs:
 
       - name: Run regression tests
         run: npm test
+        working-directory: servers/brozicode
+
+      - name: Token A/B benchmark (guards headline reduction claim)
+        run: npm run bench
         working-directory: servers/brozicode
 
       - name: Build bundle

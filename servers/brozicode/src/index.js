@@ -21,7 +21,7 @@ process.on('unhandledRejection', (reason) => {
 
 const server = new McpServer({
   name: 'brozicode',
-  version: '0.10.1',
+  version: '0.10.2',
 });
 
 registerBatchEdit(server);
