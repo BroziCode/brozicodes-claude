@@ -17,10 +17,22 @@ function normalizeWhitespace(str) {
     .trim();
 }
 
-function applyEditToContent(fileContent, oldContent, newContent, filePath) {
-  // Tier 1: Exact match
-  if (fileContent.includes(oldContent)) {
-    return { success: true, result: fileContent.replace(oldContent, newContent) };
+export function applyEditToContent(fileContent, oldContent, newContent, filePath) {
+  // Tier 1: Exact match — index-spliced (NOT String.replace).
+  //  - String.replace interprets dollar-sequences in newContent as special
+  //    replacement patterns (matched text, capture groups, pre/post-match) -> silent
+  //    corruption. Splicing by index keeps newContent byte-for-byte literal.
+  //  - String.replace also silently edits only the FIRST of several matches. We refuse
+  //    to guess which (mirrors native Edit's uniqueness requirement).
+  const firstIdx = fileContent.indexOf(oldContent);
+  if (firstIdx !== -1) {
+    if (fileContent.indexOf(oldContent, firstIdx + oldContent.length) !== -1) {
+      const count = fileContent.split(oldContent).length - 1;
+      return { success: false, error: buildAmbiguityError(fileContent, oldContent, count) };
+    }
+    const result =
+      fileContent.slice(0, firstIdx) + newContent + fileContent.slice(firstIdx + oldContent.length);
+    return { success: true, result };
   }
 
   // Tier 2: Whitespace-normalized match
@@ -107,6 +119,18 @@ function levenshteinDistance(a, b) {
   return prev[n];
 }
 
+function buildAmbiguityError(fileContent, oldContent, count) {
+  const lines     = fileContent.split('\n');
+  const firstLine = oldContent.split('\n')[0].trim();
+  const hits      = [];
+  lines.forEach((l, i) => { if (firstLine && l.includes(firstLine)) hits.push(i + 1); });
+
+  let msg = `❌ AMBIGUOUS — oldContent matches ${count} locations; refusing to guess which one.\n`;
+  msg    += `   First line "${firstLine.slice(0, 90)}" appears near lines: ${hits.slice(0, 10).join(', ')}${hits.length > 10 ? '…' : ''}\n`;
+  msg    += `   → Add surrounding context to oldContent so it matches exactly ONE location, then resubmit.`;
+  return msg;
+}
+
 function buildMatchError(fileContent, oldContent, nearestMatch) {
   const oldLines  = oldContent.split('\n');
   const firstLine = oldLines[0].slice(0, 120);
@@ -180,7 +204,7 @@ async function runValidation(validate, editedFiles) {
 
 // ─── Response Builder ────────────────────────────────────────────────────────
 
-function buildResponse(results, validationResult, totalEdits) {
+function buildResponse(results, validationResult, totalEdits, wrote = true) {
   const succeeded   = results.filter(r => r.success);
   const failed      = results.filter(r => !r.success);
   // Edits never attempted because stopOnFirstError aborted the batch early
@@ -204,11 +228,18 @@ function buildResponse(results, validationResult, totalEdits) {
     }
   } else if (succeeded.length > 0) {
     const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : '';
-    text += `⚠ Applied ${succeeded.length} of ${totalEdits} edit(s) — ${failed.length} failed${skippedNote}.\n\n`;
+    // When stopOnFirstError aborts with a failure, NO files are written (atomic batch).
+    // Don't print a check-mark for edits that were rolled back — that was misleading.
+    const mark = wrote ? '✓' : '○';
+    if (!wrote) {
+      text += `↩ NOTHING WRITTEN — ${failed.length} edit(s) failed and stopOnFirstError aborted the batch (atomic rollback). ${succeeded.length} edit(s) would have applied${skippedNote}.\n\n`;
+    } else {
+      text += `⚠ Applied ${succeeded.length} of ${totalEdits} edit(s) — ${failed.length} failed${skippedNote}.\n\n`;
+    }
     const byFile = {};
     succeeded.forEach(r => { byFile[r.file] = (byFile[r.file] || 0) + 1; });
     Object.entries(byFile).forEach(([file, count]) => {
-      text += `  ✓ ${file}  ${count} edit(s)\n`;
+      text += `  ${mark} ${file}  ${count} edit(s)${wrote ? '' : ' (not written)'}\n`;
     });
     text += `\nFailed edits:\n`;
     failed.forEach(r => { text += `\n  ✗ ${r.file}\n  ${r.error.split('\n').join('\n  ')}\n`; });
@@ -355,7 +386,8 @@ async function handler({ edits, validate, stopOnFirstError }) {
   }
 
   // 6. Build and return response
-  const responseText = buildResponse(results, validationResult, edits.length);
+  const wrote        = failures.length === 0 || !stopOnFirstError;
+  const responseText = buildResponse(results, validationResult, edits.length, wrote);
 
   return {
     content: [{ type: 'text', text: responseText }],

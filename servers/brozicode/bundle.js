@@ -42575,8 +42575,14 @@ function normalizeWhitespace(str) {
   return str.replace(/\r\n/g, "\n").replace(/\t/g, "  ").replace(/[ \t]+$/gm, "").trim();
 }
 function applyEditToContent(fileContent, oldContent, newContent, filePath) {
-  if (fileContent.includes(oldContent)) {
-    return { success: true, result: fileContent.replace(oldContent, newContent) };
+  const firstIdx = fileContent.indexOf(oldContent);
+  if (firstIdx !== -1) {
+    if (fileContent.indexOf(oldContent, firstIdx + oldContent.length) !== -1) {
+      const count = fileContent.split(oldContent).length - 1;
+      return { success: false, error: buildAmbiguityError(fileContent, oldContent, count) };
+    }
+    const result = fileContent.slice(0, firstIdx) + newContent + fileContent.slice(firstIdx + oldContent.length);
+    return { success: true, result };
   }
   const normalizedFile = normalizeWhitespace(fileContent);
   const normalizedOld = normalizeWhitespace(oldContent);
@@ -42642,6 +42648,20 @@ function levenshteinDistance(a, b) {
     [prev, curr] = [curr, prev];
   }
   return prev[n];
+}
+function buildAmbiguityError(fileContent, oldContent, count) {
+  const lines = fileContent.split("\n");
+  const firstLine = oldContent.split("\n")[0].trim();
+  const hits = [];
+  lines.forEach((l, i) => {
+    if (firstLine && l.includes(firstLine)) hits.push(i + 1);
+  });
+  let msg = `\u274C AMBIGUOUS \u2014 oldContent matches ${count} locations; refusing to guess which one.
+`;
+  msg += `   First line "${firstLine.slice(0, 90)}" appears near lines: ${hits.slice(0, 10).join(", ")}${hits.length > 10 ? "\u2026" : ""}
+`;
+  msg += `   \u2192 Add surrounding context to oldContent so it matches exactly ONE location, then resubmit.`;
+  return msg;
 }
 function buildMatchError(fileContent, oldContent, nearestMatch) {
   const oldLines = oldContent.split("\n");
@@ -42712,7 +42732,7 @@ async function runValidation(validate, editedFiles) {
     };
   }
 }
-function buildResponse(results, validationResult, totalEdits) {
+function buildResponse(results, validationResult, totalEdits, wrote = true) {
   const succeeded = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success);
   const skipped = totalEdits - results.length;
@@ -42742,15 +42762,22 @@ function buildResponse(results, validationResult, totalEdits) {
     }
   } else if (succeeded.length > 0) {
     const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : "";
-    text += `\u26A0 Applied ${succeeded.length} of ${totalEdits} edit(s) \u2014 ${failed.length} failed${skippedNote}.
+    const mark = wrote ? "\u2713" : "\u25CB";
+    if (!wrote) {
+      text += `\u21A9 NOTHING WRITTEN \u2014 ${failed.length} edit(s) failed and stopOnFirstError aborted the batch (atomic rollback). ${succeeded.length} edit(s) would have applied${skippedNote}.
 
 `;
+    } else {
+      text += `\u26A0 Applied ${succeeded.length} of ${totalEdits} edit(s) \u2014 ${failed.length} failed${skippedNote}.
+
+`;
+    }
     const byFile = {};
     succeeded.forEach((r) => {
       byFile[r.file] = (byFile[r.file] || 0) + 1;
     });
     Object.entries(byFile).forEach(([file, count]) => {
-      text += `  \u2713 ${file}  ${count} edit(s)
+      text += `  ${mark} ${file}  ${count} edit(s)${wrote ? "" : " (not written)"}
 `;
     });
     text += `
@@ -42899,7 +42926,8 @@ If you're creating a new file, omit oldContent entirely.`
     const editedFiles = [...new Set(results.filter((r) => r.success).map((r) => r.file))];
     validationResult = await runValidation(validate, editedFiles);
   }
-  const responseText = buildResponse(results, validationResult, edits.length);
+  const wrote = failures.length === 0 || !stopOnFirstError;
+  const responseText = buildResponse(results, validationResult, edits.length, wrote);
   return {
     content: [{ type: "text", text: responseText }],
     isError: failures.length > 0
@@ -43783,7 +43811,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.10.0"
+  version: "0.10.1"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);
