@@ -161,7 +161,7 @@ function extractExportMeta(node) {
 
 // ─── Main extractor ──────────────────────────────────────────────────────────
 
-function extractSkeleton(code, filePath, options) {
+export function extractSkeleton(code, filePath, options) {
   const { includeImports, includeTypes, includePrivate } = options;
   const ast         = parseFile(code, filePath);
   const lineOffsets = buildLineOffsets(code); // built once — O(n)
@@ -269,10 +269,87 @@ function extractSkeleton(code, filePath, options) {
   return { sorted, totalLines, imports, exports };
 }
 
+// ─── Multi-language regex skeletons ──────────────────────────────────────────
+// Babel only handles JS/TS. For other languages we extract top-level declarations
+// with line-anchored regexes. Best-effort (not a full parser), but turns a raw
+// dump of a 1000-line Python/Go/Rust file into a ~30-line signature map.
+
+const JSTS_EXTS = new Set(['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs']);
+
+const PY    = /^\s*(?:@[\w.]+\s*)?(?:async\s+def|def|class)\s+\w/;
+const GO    = /^\s*func\b|^\s*type\s+\w/;
+const RS    = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|impl|mod|type|const|static)\s+\w/;
+const RB    = /^\s*(?:def|class|module)\s+\w/;
+const PHP   = /^\s*(?:abstract\s+|final\s+)?(?:public|private|protected|static|\s)*(?:function|class|interface|trait)\s+\w/;
+const JAVA  = /^\s*(?:(?:public|private|protected)\s+)?(?:static\s+|final\s+|abstract\s+)?(?:class|interface|enum)\s+\w|^\s*(?:public|private|protected)\s+[\w<>\[\],.\s]+\s+\w+\s*\([^;{]*$/;
+const CS    = /^\s*(?:(?:public|private|protected|internal)\s+)?(?:static\s+|sealed\s+|abstract\s+|partial\s+)?(?:class|interface|struct|enum)\s+\w|^\s*(?:public|private|protected|internal)\s+[\w<>\[\],.\s]+\s+\w+\s*\(/;
+const KT    = /^\s*(?:(?:public|private|internal|open|abstract|sealed)\s+)*(?:fun|class|object|interface)\s+\w/;
+const SWIFT = /^\s*(?:(?:public|private|internal|open|fileprivate)\s+)*(?:func|class|struct|enum|protocol|extension)\s+\w/;
+const CLIKE = /^[A-Za-z_][\w\s\*:<>,&]*\s+\*?\w+\s*\([^;]*\)\s*\{?\s*$|^\s*(?:class|struct|namespace)\s+\w/;
+
+const REGEX_SKELETON = {
+  py: PY, pyi: PY,
+  go: GO,
+  rs: RS,
+  rb: RB,
+  php: PHP,
+  java: JAVA,
+  cs: CS,
+  kt: KT, kts: KT,
+  swift: SWIFT,
+  c: CLIKE, h: CLIKE,
+  cpp: CLIKE, cc: CLIKE, cxx: CLIKE, hpp: CLIKE, hh: CLIKE,
+};
+
+const REGEX_EXTS = new Set(Object.keys(REGEX_SKELETON));
+
+export function extractRegexSkeleton(code, filePath) {
+  const ext = path.extname(filePath).slice(1).toLowerCase();
+  const pat = REGEX_SKELETON[ext];
+  if (!pat) return null;
+
+  const lines  = code.split('\n');
+  const sorted = [];
+  const seen   = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.length > 400) continue;
+    if (pat.test(line)) {
+      const text = line.replace(/\s+$/, '').replace(/\s*[{:]\s*$/, '').slice(0, 160);
+      const key  = text.trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sorted.push({ lineNum: i + 1, text });
+    }
+  }
+  return { sorted, totalLines: lines.length, imports: [], exports: [] };
+}
+
+/** Dispatch to the right skeleton extractor by extension. Returns null for
+ *  languages with no extractor (caller falls back to raw content). */
+export function buildSkeleton(content, filePath, options) {
+  const ext = path.extname(filePath).slice(1).toLowerCase();
+  if (JSTS_EXTS.has(ext))      return extractSkeleton(content, filePath, options);
+  if (REGEX_SKELETON[ext])     return extractRegexSkeleton(content, filePath);
+  return null;
+}
+
+/** Budget-bound a skeleton to maxLines, prioritizing the public surface
+ *  (exports, public/pub members, type/class/fn declarations). Returns a NEW
+ *  object so a cached skeleton is never mutated. maxLines<=0 ⇒ unbounded. */
+export function trimSkeleton(result, maxLines) {
+  if (!result || !maxLines || maxLines <= 0 || result.sorted.length <= maxLines) return result;
+  const PRIORITY = /\b(?:export|public|pub|class|interface|struct|enum|trait|module|def|func|fn)\b/;
+  const pri = [], rest = [];
+  for (const item of result.sorted) (PRIORITY.test(item.text) ? pri : rest).push(item);
+  const kept = [...pri, ...rest].slice(0, maxLines).sort((a, b) => a.lineNum - b.lineNum);
+  return { ...result, sorted: kept, trimmed: result.sorted.length - kept.length };
+}
+
 // ─── Response builder ────────────────────────────────────────────────────────
 
 function buildResponse(filePath, result, projectDir) {
-  const { sorted, totalLines, imports, exports } = result;
+  const { sorted, totalLines, imports, exports, trimmed } = result;
   const rel     = projectDir ? path.relative(projectDir, filePath) : path.basename(filePath);
   const display = rel.startsWith('..') ? path.basename(filePath) : rel;
 
@@ -292,6 +369,10 @@ function buildResponse(filePath, result, projectDir) {
       .map(({ source, specifiers }) => `${source} → ${specifiers.join(', ')}`)
       .join(' | ');
     out += `imports: ${importStr}\n`;
+  }
+
+  if (trimmed > 0) {
+    out += `\n(+${trimmed} more symbol(s) omitted — raise max_skeleton_lines to see them)\n`;
   }
 
   return out.trim();
@@ -411,6 +492,7 @@ async function handler({
   includeTypes,
   includePrivate,
   relevance_threshold,
+  max_skeleton_lines,
 }) {
   resetIfNewSession(); // drop cross-session stale-read ledger before serving
 
@@ -556,35 +638,38 @@ async function handler({
     let section;
 
     if (summary) {
-      if (isJsTs) {
-        try {
-          // Use cached skeleton when available (same options key)
-          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
-          const cEntry = fileCache.get(fp);
-          let skeleton;
-          if (cEntry?.skeletons?.has(optKey)) {
-            skeleton = cEntry.skeletons.get(optKey);
-          } else {
-            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-            cEntry?.skeletons?.set(optKey, skeleton);
-          }
-          if (skeleton.sorted.length === 0) {
-            // Skeleton extraction produced nothing (parser quirk / no top-level decls).
-            // Fall back to a raw head slice instead of emitting an empty section.
-            const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
-            section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty — raw head)\n${addLineNumbers(raw, lineStart ?? 1)}`;
-          } else {
-            section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
-          }
-          // Record full-file skeleton returns for stale detection
-          if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
-        } catch {
+      try {
+        // Use cached skeleton when available (same options key)
+        const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+        const cEntry = fileCache.get(fp);
+        let skeleton;
+        if (cEntry?.skeletons?.has(optKey)) {
+          skeleton = cEntry.skeletons.get(optKey);
+        } else {
+          skeleton = buildSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          if (skeleton) cEntry?.skeletons?.set(optKey, skeleton);
+        }
+        if (skeleton) skeleton = trimSkeleton(skeleton, max_skeleton_lines);
+
+        if (!skeleton) {
+          // No skeleton extractor for this language — raw slice.
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
+        } else if (skeleton.sorted.length === 0) {
+          // Extractor produced nothing (parser quirk / no top-level decls).
+          // Fall back to a raw head slice instead of emitting an empty section.
+          const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
+          section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty — raw head)\n${addLineNumbers(raw, lineStart ?? 1)}`;
+        } else {
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
         }
-      } else {
+        // Record full-file skeleton returns for stale detection
+        if (lineStart === null && skeleton && skeleton.sorted.length > 0) {
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+        }
+      } catch {
         const sliced = sliceLines(contentLines, lineStart, lineEnd);
-        section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${sliced.join('\n')}`;
+        section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
       }
 
     } else if (useContext) {
@@ -619,7 +704,7 @@ async function handler({
       // Without this gate a 2500-line file returns ~90KB raw, exceeds Claude Code's
       // internal MCP token buffer, gets saved to disk, and triggers an expensive
       // chunk-read subagent spiral (observed cost: ~57k tokens on a single file).
-      if (!section && isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+      if (!section && (isJsTs || REGEX_EXTS.has(ext)) && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
         try {
           const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
           const cEntry = fileCache.get(fp);
@@ -627,10 +712,11 @@ async function handler({
           if (cEntry?.skeletons?.has(optKey)) {
             skeleton = cEntry.skeletons.get(optKey);
           } else {
-            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-            cEntry?.skeletons?.set(optKey, skeleton);
+            skeleton = buildSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            if (skeleton) cEntry?.skeletons?.set(optKey, skeleton);
           }
-          if (skeleton.sorted.length > 0) {
+          if (skeleton) skeleton = trimSkeleton(skeleton, max_skeleton_lines);
+          if (skeleton && skeleton.sorted.length > 0) {
             const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
             section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
             // Record this auto-skeleton return for stale detection
@@ -763,6 +849,9 @@ export function registerSmartSearch(server) {
 
       relevance_threshold: z.number().min(0).max(1).default(0)
         .describe('Min match density (matches ÷ total lines) to include a file. 0 = disabled. E.g. 0.02 = skip files where <2% of lines match content_regex.'),
+
+      max_skeleton_lines: z.number().int().min(0).default(0)
+        .describe('(summary / auto-skeleton) Cap skeleton to N symbols, keeping the public surface first. 0 = unbounded. Set e.g. 80 to bound large files.'),
     },
     handler
   );

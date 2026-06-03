@@ -191,11 +191,17 @@ function buildResponse(results, validationResult, totalEdits) {
 
   if (failed.length === 0 && skipped === 0) {
     text += `✓ Applied ${succeeded.length} edit(s) across ${filesEdited.length} file(s)\n\n`;
-    const byFile = {};
+    const byFile  = {};
     succeeded.forEach(r => { byFile[r.file] = (byFile[r.file] || 0) + 1; });
-    Object.entries(byFile).forEach(([file, count]) => {
-      text += `  ${file}  ${count} edit(s) applied\n`;
-    });
+    const entries = Object.entries(byFile);
+    // TOON-style tabular encoding once the list is large enough that declaring the
+    // "edit(s) applied" suffix once (instead of per row) actually saves tokens.
+    if (entries.length > 5) {
+      text += `files[${entries.length}]{path,edits}:\n`;
+      entries.forEach(([file, count]) => { text += `  ${file},${count}\n`; });
+    } else {
+      entries.forEach(([file, count]) => { text += `  ${file}  ${count} edit(s) applied\n`; });
+    }
   } else if (succeeded.length > 0) {
     const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : '';
     text += `⚠ Applied ${succeeded.length} of ${totalEdits} edit(s) — ${failed.length} failed${skippedNote}.\n\n`;

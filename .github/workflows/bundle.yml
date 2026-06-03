@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'servers/brozicode/src/**'
+      - 'servers/brozicode/test/**'
       - 'servers/brozicode/package.json'
 
 jobs:
@@ -22,6 +23,10 @@ jobs:
 
       - name: Install deps
         run: npm install
+        working-directory: servers/brozicode
+
+      - name: Run regression tests
+        run: npm test
         working-directory: servers/brozicode
 
       - name: Build bundle

@@ -42726,10 +42726,20 @@ function buildResponse(results, validationResult, totalEdits) {
     succeeded.forEach((r) => {
       byFile[r.file] = (byFile[r.file] || 0) + 1;
     });
-    Object.entries(byFile).forEach(([file, count]) => {
-      text += `  ${file}  ${count} edit(s) applied
+    const entries = Object.entries(byFile);
+    if (entries.length > 5) {
+      text += `files[${entries.length}]{path,edits}:
 `;
-    });
+      entries.forEach(([file, count]) => {
+        text += `  ${file},${count}
+`;
+      });
+    } else {
+      entries.forEach(([file, count]) => {
+        text += `  ${file}  ${count} edit(s) applied
+`;
+      });
+    }
   } else if (succeeded.length > 0) {
     const skippedNote = skipped > 0 ? `, ${skipped} not attempted` : "";
     text += `\u26A0 Applied ${succeeded.length} of ${totalEdits} edit(s) \u2014 ${failed.length} failed${skippedNote}.
@@ -43152,8 +43162,74 @@ function extractSkeleton(code, filePath, options) {
   });
   return { sorted, totalLines, imports, exports };
 }
+var JSTS_EXTS = /* @__PURE__ */ new Set(["js", "ts", "jsx", "tsx", "mjs", "cjs"]);
+var PY = /^\s*(?:@[\w.]+\s*)?(?:async\s+def|def|class)\s+\w/;
+var GO = /^\s*func\b|^\s*type\s+\w/;
+var RS = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|impl|mod|type|const|static)\s+\w/;
+var RB = /^\s*(?:def|class|module)\s+\w/;
+var PHP = /^\s*(?:abstract\s+|final\s+)?(?:public|private|protected|static|\s)*(?:function|class|interface|trait)\s+\w/;
+var JAVA = /^\s*(?:(?:public|private|protected)\s+)?(?:static\s+|final\s+|abstract\s+)?(?:class|interface|enum)\s+\w|^\s*(?:public|private|protected)\s+[\w<>\[\],.\s]+\s+\w+\s*\([^;{]*$/;
+var CS = /^\s*(?:(?:public|private|protected|internal)\s+)?(?:static\s+|sealed\s+|abstract\s+|partial\s+)?(?:class|interface|struct|enum)\s+\w|^\s*(?:public|private|protected|internal)\s+[\w<>\[\],.\s]+\s+\w+\s*\(/;
+var KT = /^\s*(?:(?:public|private|internal|open|abstract|sealed)\s+)*(?:fun|class|object|interface)\s+\w/;
+var SWIFT = /^\s*(?:(?:public|private|internal|open|fileprivate)\s+)*(?:func|class|struct|enum|protocol|extension)\s+\w/;
+var CLIKE = /^[A-Za-z_][\w\s\*:<>,&]*\s+\*?\w+\s*\([^;]*\)\s*\{?\s*$|^\s*(?:class|struct|namespace)\s+\w/;
+var REGEX_SKELETON = {
+  py: PY,
+  pyi: PY,
+  go: GO,
+  rs: RS,
+  rb: RB,
+  php: PHP,
+  java: JAVA,
+  cs: CS,
+  kt: KT,
+  kts: KT,
+  swift: SWIFT,
+  c: CLIKE,
+  h: CLIKE,
+  cpp: CLIKE,
+  cc: CLIKE,
+  cxx: CLIKE,
+  hpp: CLIKE,
+  hh: CLIKE
+};
+var REGEX_EXTS = new Set(Object.keys(REGEX_SKELETON));
+function extractRegexSkeleton(code, filePath) {
+  const ext = path2.extname(filePath).slice(1).toLowerCase();
+  const pat = REGEX_SKELETON[ext];
+  if (!pat) return null;
+  const lines = code.split("\n");
+  const sorted = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.length > 400) continue;
+    if (pat.test(line)) {
+      const text = line.replace(/\s+$/, "").replace(/\s*[{:]\s*$/, "").slice(0, 160);
+      const key = text.trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sorted.push({ lineNum: i + 1, text });
+    }
+  }
+  return { sorted, totalLines: lines.length, imports: [], exports: [] };
+}
+function buildSkeleton(content, filePath, options) {
+  const ext = path2.extname(filePath).slice(1).toLowerCase();
+  if (JSTS_EXTS.has(ext)) return extractSkeleton(content, filePath, options);
+  if (REGEX_SKELETON[ext]) return extractRegexSkeleton(content, filePath);
+  return null;
+}
+function trimSkeleton(result, maxLines) {
+  if (!result || !maxLines || maxLines <= 0 || result.sorted.length <= maxLines) return result;
+  const PRIORITY = /\b(?:export|public|pub|class|interface|struct|enum|trait|module|def|func|fn)\b/;
+  const pri = [], rest = [];
+  for (const item of result.sorted) (PRIORITY.test(item.text) ? pri : rest).push(item);
+  const kept = [...pri, ...rest].slice(0, maxLines).sort((a, b) => a.lineNum - b.lineNum);
+  return { ...result, sorted: kept, trimmed: result.sorted.length - kept.length };
+}
 function buildResponse2(filePath, result, projectDir) {
-  const { sorted, totalLines, imports, exports } = result;
+  const { sorted, totalLines, imports, exports, trimmed } = result;
   const rel = projectDir ? path2.relative(projectDir, filePath) : path2.basename(filePath);
   const display = rel.startsWith("..") ? path2.basename(filePath) : rel;
   let out = `# ${display} (${totalLines}\u2192${sorted.length} lines)
@@ -43171,6 +43247,11 @@ exports: ${unique.map((e) => `${e.name} (${e.kind})`).join(", ")}
   if (imports.length > 0) {
     const importStr = imports.map(({ source, specifiers }) => `${source} \u2192 ${specifiers.join(", ")}`).join(" | ");
     out += `imports: ${importStr}
+`;
+  }
+  if (trimmed > 0) {
+    out += `
+(+${trimmed} more symbol(s) omitted \u2014 raise max_skeleton_lines to see them)
 `;
   }
   return out.trim();
@@ -43256,7 +43337,8 @@ async function handler2({
   includeImports,
   includeTypes,
   includePrivate,
-  relevance_threshold
+  relevance_threshold,
+  max_skeleton_lines
 }) {
   resetIfNewSession();
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -43355,35 +43437,36 @@ async function handler2({
     const isJsTs = ["js", "ts", "jsx", "tsx", "mjs", "cjs"].includes(ext);
     let section;
     if (summary) {
-      if (isJsTs) {
-        try {
-          const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
-          const cEntry = fileCache.get(fp);
-          let skeleton;
-          if (cEntry?.skeletons?.has(optKey)) {
-            skeleton = cEntry.skeletons.get(optKey);
-          } else {
-            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-            cEntry?.skeletons?.set(optKey, skeleton);
-          }
-          if (skeleton.sorted.length === 0) {
-            const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
-            section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty \u2014 raw head)
-${addLineNumbers(raw, lineStart ?? 1)}`;
-          } else {
-            section = `### ${relativize(fp, projectDir)}${rangeLabel}
-${buildResponse2(fp, skeleton, projectDir)}`;
-          }
-          if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
-        } catch {
+      try {
+        const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
+        const cEntry = fileCache.get(fp);
+        let skeleton;
+        if (cEntry?.skeletons?.has(optKey)) {
+          skeleton = cEntry.skeletons.get(optKey);
+        } else {
+          skeleton = buildSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+          if (skeleton) cEntry?.skeletons?.set(optKey, skeleton);
+        }
+        if (skeleton) skeleton = trimSkeleton(skeleton, max_skeleton_lines);
+        if (!skeleton) {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
           section = `### ${relativize(fp, projectDir)}${rangeLabel}
 ${addLineNumbers(sliced, lineStart ?? 1)}`;
+        } else if (skeleton.sorted.length === 0) {
+          const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
+          section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty \u2014 raw head)
+${addLineNumbers(raw, lineStart ?? 1)}`;
+        } else {
+          section = `### ${relativize(fp, projectDir)}${rangeLabel}
+${buildResponse2(fp, skeleton, projectDir)}`;
         }
-      } else {
+        if (lineStart === null && skeleton && skeleton.sorted.length > 0) {
+          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+        }
+      } catch {
         const sliced = sliceLines(contentLines, lineStart, lineEnd);
         section = `### ${relativize(fp, projectDir)}${rangeLabel}
-${sliced.join("\n")}`;
+${addLineNumbers(sliced, lineStart ?? 1)}`;
       }
     } else if (useContext) {
       contentRe.lastIndex = 0;
@@ -43406,7 +43489,7 @@ ${ctx.text}`;
 [in-context \u2014 unchanged since ${prev.isoTime}. Skip: if_modified_since:"${prev.isoTime}" | Slice: #N-M | Skeleton: summary:true]`;
         }
       }
-      if (!section && isJsTs && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
+      if (!section && (isJsTs || REGEX_EXTS.has(ext)) && lineStart === null && contentLines.length > MAX_FILE_LINES_RAW) {
         try {
           const optKey = `${includeImports}-${includeTypes}-${includePrivate}`;
           const cEntry = fileCache.get(fp);
@@ -43414,10 +43497,11 @@ ${ctx.text}`;
           if (cEntry?.skeletons?.has(optKey)) {
             skeleton = cEntry.skeletons.get(optKey);
           } else {
-            skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
-            cEntry?.skeletons?.set(optKey, skeleton);
+            skeleton = buildSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
+            if (skeleton) cEntry?.skeletons?.set(optKey, skeleton);
           }
-          if (skeleton.sorted.length > 0) {
+          if (skeleton) skeleton = trimSkeleton(skeleton, max_skeleton_lines);
+          if (skeleton && skeleton.sorted.length > 0) {
             const note = `\u26A1auto-skeleton (${contentLines.length} lines \u2014 add summary:true or a #N-M range to silence this)`;
             section = `### ${relativize(fp, projectDir)} ${note}
 ${buildResponse2(fp, skeleton, projectDir)}`;
@@ -43500,7 +43584,8 @@ function registerSmartSearch(server2) {
       includeImports: external_exports.boolean().default(true).describe("(summary mode) Include import statements in skeleton."),
       includeTypes: external_exports.boolean().default(true).describe("(summary mode) Include TS type/interface definitions in skeleton."),
       includePrivate: external_exports.boolean().default(false).describe("(summary mode) Include private class members in skeleton."),
-      relevance_threshold: external_exports.number().min(0).max(1).default(0).describe("Min match density (matches \xF7 total lines) to include a file. 0 = disabled. E.g. 0.02 = skip files where <2% of lines match content_regex.")
+      relevance_threshold: external_exports.number().min(0).max(1).default(0).describe("Min match density (matches \xF7 total lines) to include a file. 0 = disabled. E.g. 0.02 = skip files where <2% of lines match content_regex."),
+      max_skeleton_lines: external_exports.number().int().min(0).default(0).describe("(summary / auto-skeleton) Cap skeleton to N symbols, keeping the public surface first. 0 = unbounded. Set e.g. 80 to bound large files.")
     },
     handler2
   );
@@ -43698,7 +43783,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.9.1"
+  version: "0.10.0"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

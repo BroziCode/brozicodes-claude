@@ -73,20 +73,22 @@ process.stdin.on('end', () => {
     const toolName = event?.tool_name || event?.tool?.name || '';
     const savings = loadSavings();
 
+    // Measure what ACTUALLY entered context: the byte size of the tool response.
+    // (~4 bytes/token heuristic.) This replaces the previous hardcoded fictional
+    // numbers so the budget guard and savings report reflect real consumption.
+    const rawResp   = event?.tool_response ?? event?.tool_result ?? event?.output ?? event?.result;
+    const respBytes = rawResp == null ? 0
+      : (typeof rawResp === 'string' ? rawResp.length : JSON.stringify(rawResp).length);
+    const respTokens = Math.ceil(respBytes / 4);
+
     if (toolName.includes('brozi_batch_edit')) {
-      // Each batch_edit replaces ~6 micro-tool calls on average
-      // Estimate: 2,000 tokens saved per avoided roundtrip × 5 avoided roundtrips
-      savings.savedRoundtrips  += 5;
-      savings.tokensEstimated  += 10_000;
-      savings.tokensConsumed    = (savings.tokensConsumed || 0) + 3_000;
-      savings.batchEditCalls   += 1;
+      savings.batchEditCalls  += 1;
+      savings.savedRoundtrips += 5; // replaces ~6 Read→Edit→Verify micro-calls
+      savings.tokensConsumed   = (savings.tokensConsumed || 0) + respTokens;
     } else if (toolName.includes('brozi_smart_search')) {
-      // Replaces a full file read — estimate 1,800 tokens saved per call
-      // Plus avoids 1 follow-up roundtrip
-      savings.savedRoundtrips  += 1;
-      savings.tokensEstimated  += 1_800;
-      savings.tokensConsumed    = (savings.tokensConsumed || 0) + 2_500;
       savings.smartSearchCalls += 1;
+      savings.savedRoundtrips  += 1;
+      savings.tokensConsumed    = (savings.tokensConsumed || 0) + respTokens;
       // Track glob patterns for pre-compact snapshot (Read is blocked, so this is our only signal)
       const patterns = event?.tool_input?.file_glob_patterns;
       if (Array.isArray(patterns)) {
@@ -95,19 +97,24 @@ process.stdin.on('end', () => {
         if (savings.recentPatterns.length > 20) savings.recentPatterns = savings.recentPatterns.slice(-20);
       }
     } else if (toolName.includes('brozi_run')) {
-      // Output interception — large outputs stored, not in context. Estimate 500 tokens consumed.
-      savings.savedRoundtrips  += 1;
-      savings.tokensEstimated  += 800;
-      savings.tokensConsumed    = (savings.tokensConsumed || 0) + 500;
-      savings.runCalls          = (savings.runCalls || 0) + 1;
+      savings.runCalls         = (savings.runCalls || 0) + 1;
+      savings.savedRoundtrips += 1;
+      savings.tokensConsumed    = (savings.tokensConsumed || 0) + respTokens;
     } else if (NATIVE_FALLBACK_TOOLS.has(toolName)) {
       // Agent used a native tool despite brozi hooks — track compliance
-      savings.nativeFallbacks   = (savings.nativeFallbacks || 0) + 1;
-      savings.tokensConsumed    = (savings.tokensConsumed || 0) + 1_500; // native tools are expensive
+      savings.nativeFallbacks  = (savings.nativeFallbacks || 0) + 1;
+      savings.tokensConsumed    = (savings.tokensConsumed || 0) + respTokens;
     } else if (!toolName && event?.prompt) {
-      // UserPromptSubmit — count user message overhead
-      savings.tokensConsumed = (savings.tokensConsumed || 0) + 300;
+      // UserPromptSubmit — count user message overhead from real prompt length
+      savings.tokensConsumed   = (savings.tokensConsumed || 0) + Math.ceil((event.prompt.length || 0) / 4);
+    } else if (respTokens > 0) {
+      // Any other tool whose output enters the context window
+      savings.tokensConsumed   = (savings.tokensConsumed || 0) + respTokens;
     }
+
+    // Savings is a clearly-labeled HEURISTIC (not measured): each avoided roundtrip
+    // saves ~1,800 tokens of tool-call + redundant re-read overhead on average.
+    savings.tokensEstimated = savings.savedRoundtrips * 1_800;
 
     // Track recently accessed files (from Read tool — kept for compatibility even though blocked)
     if (toolName === 'Read') {
@@ -144,7 +151,7 @@ process.stdin.on('end', () => {
       ].filter(Boolean).join(', ');
       const consumed   = savings.tokensConsumed || 0;
       const consumedK  = (consumed / 1000).toFixed(1);
-      let line = `\n brozicode · ~${dollarEst} saved · ${(tokens / 1000).toFixed(1)}k tokens saved · ${consumedK}k consumed · ${roundtrips} roundtrips`;
+      let line = `\n brozicode · ~${dollarEst} est. saved · ~${(tokens / 1000).toFixed(1)}k tokens (est.) · ${consumedK}k consumed (measured) · ${roundtrips} roundtrips`;
       line    += `  [${toolSummary || 'no brozi tool calls'}]`;
       if (fallbacks > 0) line += `  ⚠ ${fallbacks} native fallback${fallbacks !== 1 ? 's' : ''} (${compliance}% compliance)`;
       process.stdout.write(line + '\n\n');

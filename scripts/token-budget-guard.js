@@ -7,7 +7,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const SESSION_BUDGET = 150_000; // tokens
+// Configurable via BROZICODE_TOKEN_BUDGET env var; defaults to 150k (a reasonable
+// warn threshold under a 200k context window). tokensConsumed is now measured from
+// real tool-response sizes, so these thresholds reflect actual context fill.
+const SESSION_BUDGET = Number(process.env.BROZICODE_TOKEN_BUDGET) || 150_000; // tokens
 
 const THRESHOLDS = [
   { pct: 0.90, icon: '🚨', msg: '~90% context used. Run /compact NOW to preserve work.' },
