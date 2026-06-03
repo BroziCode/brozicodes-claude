@@ -47,6 +47,14 @@ process.stdin.on('end', () => {
   const NATIVE_FALLBACK_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'Grep', 'Glob', 'NotebookEdit']);
 
   if (command === 'init') {
+    // Bump the session epoch so the long-lived MCP server drops its cross-session
+    // stale-read ledger (otherwise it reports files as "in-context" that were never
+    // shown in this conversation).
+    try {
+      const epochFile = path.join(os.tmpdir(), 'brozicode-session-epoch');
+      fs.writeFileSync(epochFile, `${sessionId}:${Date.now()}`, 'utf8');
+    } catch { /* ignore */ }
+
     // SessionStart — initialize fresh savings file
     saveSavings({
       savedRoundtrips: 0,

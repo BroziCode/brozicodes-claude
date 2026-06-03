@@ -21537,9 +21537,9 @@ var require_path = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.convertPosixPathToPattern = exports.convertWindowsPathToPattern = exports.convertPathToPattern = exports.escapePosixPath = exports.escapeWindowsPath = exports.escape = exports.removeLeadingDotSegment = exports.makeAbsolute = exports.unixify = void 0;
-    var os = __require("os");
+    var os2 = __require("os");
     var path3 = __require("path");
-    var IS_WINDOWS_PLATFORM = os.platform() === "win32";
+    var IS_WINDOWS_PLATFORM = os2.platform() === "win32";
     var LEADING_DOT_SEGMENT_CHARACTERS_COUNT = 2;
     var POSIX_UNESCAPED_GLOB_SYMBOLS_RE = /(\\?)([()*?[\]{|}]|^!|[!+@](?=\()|\\(?![!()*+?@[\]{|}]))/g;
     var WINDOWS_UNESCAPED_GLOB_SYMBOLS_RE = /(\\?)([()[\]{}]|^!|[!+@](?=\())/g;
@@ -27057,8 +27057,8 @@ var require_settings4 = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DEFAULT_FILE_SYSTEM_ADAPTER = void 0;
     var fs3 = __require("fs");
-    var os = __require("os");
-    var CPU_COUNT = Math.max(os.cpus().length, 1);
+    var os2 = __require("os");
+    var CPU_COUNT = Math.max(os2.cpus().length, 1);
     exports.DEFAULT_FILE_SYSTEM_ADAPTER = {
       lstat: fs3.lstat,
       lstatSync: fs3.lstatSync,
@@ -42919,10 +42919,23 @@ Always use absolute paths or paths relative to the project root.`,
 // src/tools/smart-search.js
 var import_parser = __toESM(require_lib(), 1);
 var import_fast_glob = __toESM(require_out4(), 1);
-import { promises as fs2 } from "fs";
+import { promises as fs2, readFileSync } from "fs";
+import os from "os";
 import path2 from "path";
 var fileCache = /* @__PURE__ */ new Map();
 var returnedFiles = /* @__PURE__ */ new Map();
+var EPOCH_FILE = path2.join(os.tmpdir(), "brozicode-session-epoch");
+var lastEpoch = null;
+function resetIfNewSession() {
+  try {
+    const ep = readFileSync(EPOCH_FILE, "utf8");
+    if (ep !== lastEpoch) {
+      lastEpoch = ep;
+      returnedFiles.clear();
+    }
+  } catch {
+  }
+}
 function parseFile(code, filePath) {
   const ext = path2.extname(filePath).slice(1).toLowerCase();
   const plugins = [
@@ -42964,6 +42977,7 @@ function lineOf(charOffset, lineOffsets) {
   return lo + 1;
 }
 var CHILD_KEYS = [
+  "program",
   "body",
   "declarations",
   "declaration",
@@ -43244,6 +43258,7 @@ async function handler2({
   includePrivate,
   relevance_threshold
 }) {
+  resetIfNewSession();
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const sinceMs = if_modified_since ? new Date(if_modified_since).getTime() : null;
   let reFlags = "g";
@@ -43351,8 +43366,14 @@ async function handler2({
             skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
             cEntry?.skeletons?.set(optKey, skeleton);
           }
-          section = `### ${relativize(fp, projectDir)}${rangeLabel}
+          if (skeleton.sorted.length === 0) {
+            const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
+            section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty \u2014 raw head)
+${addLineNumbers(raw, lineStart ?? 1)}`;
+          } else {
+            section = `### ${relativize(fp, projectDir)}${rangeLabel}
 ${buildResponse2(fp, skeleton, projectDir)}`;
+          }
           if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
           const sliced = sliceLines(contentLines, lineStart, lineEnd);
@@ -43396,10 +43417,12 @@ ${ctx.text}`;
             skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
             cEntry?.skeletons?.set(optKey, skeleton);
           }
-          const note = `\u26A1auto-skeleton (${contentLines.length} lines \u2014 add summary:true or a #N-M range to silence this)`;
-          section = `### ${relativize(fp, projectDir)} ${note}
+          if (skeleton.sorted.length > 0) {
+            const note = `\u26A1auto-skeleton (${contentLines.length} lines \u2014 add summary:true or a #N-M range to silence this)`;
+            section = `### ${relativize(fp, projectDir)} ${note}
 ${buildResponse2(fp, skeleton, projectDir)}`;
-          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+            returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+          }
         } catch {
         }
       }
@@ -43675,7 +43698,7 @@ ${reason.stack}` : String(reason);
 });
 var server = new McpServer({
   name: "brozicode",
-  version: "0.8.0"
+  version: "0.9.1"
 });
 registerBatchEdit(server);
 registerSmartSearch(server);

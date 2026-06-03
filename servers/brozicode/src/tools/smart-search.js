@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { parse } from '@babel/parser';
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
+import os from 'os';
 import path from 'path';
 import fg from 'fast-glob';
 
@@ -12,6 +13,24 @@ const fileCache = new Map();
 // P3: Tracks files already returned to Claude's context this session.
 // Prevents re-injecting unchanged file content and refilling the context window.
 const returnedFiles = new Map(); // fp → { mtime: number, isoTime: string }
+
+// ─── Session-scoped stale-read reset ──────────────────────────────────────────
+// The MCP server is a long-lived stdio process that outlives a single Claude
+// conversation. Without this, returnedFiles leaks across sessions and reports
+// "in-context — unchanged" for files never actually shown in the new conversation,
+// blinding the agent. The SessionStart hook bumps an epoch file; when it changes
+// we drop the stale-read ledger so a fresh session always gets real content.
+const EPOCH_FILE = path.join(os.tmpdir(), 'brozicode-session-epoch');
+let lastEpoch = null;
+function resetIfNewSession() {
+  try {
+    const ep = readFileSync(EPOCH_FILE, 'utf8');
+    if (ep !== lastEpoch) {
+      lastEpoch = ep;
+      returnedFiles.clear(); // fileCache is mtime-validated → safe to keep across sessions
+    }
+  } catch { /* no epoch file yet — leave ledger as-is */ }
+}
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +85,7 @@ function lineOf(charOffset, lineOffsets) {
 
 // Curated child-bearing AST key list — avoids Object.keys() enumeration on every node.
 const CHILD_KEYS = [
+  'program',
   'body', 'declarations', 'declaration', 'specifiers', 'params', 'arguments',
   'consequent', 'alternate', 'init', 'test', 'update', 'left', 'right',
   'object', 'property', 'callee', 'expression', 'id', 'superClass', 'value',
@@ -392,6 +412,8 @@ async function handler({
   includePrivate,
   relevance_threshold,
 }) {
+  resetIfNewSession(); // drop cross-session stale-read ledger before serving
+
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const sinceMs    = if_modified_since ? new Date(if_modified_since).getTime() : null;
 
@@ -546,7 +568,14 @@ async function handler({
             skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
             cEntry?.skeletons?.set(optKey, skeleton);
           }
-          section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
+          if (skeleton.sorted.length === 0) {
+            // Skeleton extraction produced nothing (parser quirk / no top-level decls).
+            // Fall back to a raw head slice instead of emitting an empty section.
+            const raw = sliceLines(contentLines, lineStart, lineEnd).slice(0, 120);
+            section = `### ${relativize(fp, projectDir)}${rangeLabel} (skeleton empty — raw head)\n${addLineNumbers(raw, lineStart ?? 1)}`;
+          } else {
+            section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
+          }
           // Record full-file skeleton returns for stale detection
           if (lineStart === null) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
         } catch {
@@ -601,10 +630,13 @@ async function handler({
             skeleton = extractSkeleton(content, fp, { includeImports, includeTypes, includePrivate });
             cEntry?.skeletons?.set(optKey, skeleton);
           }
-          const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
-          section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
-          // Record this auto-skeleton return for stale detection
-          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+          if (skeleton.sorted.length > 0) {
+            const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
+            section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
+            // Record this auto-skeleton return for stale detection
+            returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+          }
+          // skeleton empty → leave section null; plain-content path below handles it
         } catch {
           // skeleton failed — fall through to plain truncated output
         }

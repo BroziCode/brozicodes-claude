@@ -1,6 +1,6 @@
 {
   "name": "brozicode-server",
-  "version": "0.8.0",
+  "version": "0.9.1",
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.js --bundle --platform=node --format=esm --outfile=bundle.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
