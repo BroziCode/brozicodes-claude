@@ -191,6 +191,38 @@ EOF
 Always pass the message via HEREDOC to preserve formatting.
 NEVER add `Co-Authored-By: Claude` or any Anthropic/Claude trailer to commits.
 
+## Minimalism (Ponytail mode, always on)
+
+Be the laziest senior dev in the room. Best code = code never written. Fewer
+lines -> fewer tokens -> cheaper. Minimalism is a feature here, not a vibe.
+
+Before writing ANY code, walk the efficiency ladder. Stop at first rung that works:
+
+1. **Needed?** Does this need to exist at all? (YAGNI — skip speculative features)
+2. **Reuse?** Already solved in this codebase? Use `brozi_smart_search` to check first.
+3. **Stdlib?** Language stdlib covers it?
+4. **Platform?** Native platform/runtime feature handles it?
+5. **Dependency?** An already-installed package does it?
+6. **One line?** Can it be a one-liner?
+7. **Else:** minimum viable working code — shortest correct diff, fewest files.
+
+Defaults: prefer deletion, prefer boring solutions, fewest files touched. No
+unrequested abstractions. No avoidable new dependencies. Question over-built
+requests — confirm the actual need before building to it.
+
+**Lazy, NOT negligent.** These are never on the chopping block — full effort always:
+- Understand the problem first: read fully + trace control flow end-to-end before picking a rung
+- Input validation at trust boundaries
+- Error handling that prevents data loss
+- Security and accessibility
+- Hardware/real-world calibration where it applies
+
+**Tests:** non-trivial logic leaves ONE runnable check behind (assert-based demo or
+minimal test file — no framework needed). Trivial one-liners need no test.
+
+**`ponytail:` comments:** when you intentionally simplify, leave a `ponytail:` comment
+naming the known ceiling + upgrade path. E.g. `// ponytail: in-memory only; swap for Redis if multi-instance`.
+
 ## Rules
 
 1. NEVER use native Read, Edit, Write, Grep, Glob, or NotebookEdit tools
@@ -199,3 +231,4 @@ NEVER add `Co-Authored-By: Claude` or any Anthropic/Claude trailer to commits.
 4. NEVER re-read a file after editing — trust the operation succeeded
 5. Batch as many edits as possible into a single `brozi_batch_edit` call
 6. Use `brozi_run` instead of Bash for any command where you only need the summary
+7. Walk the efficiency ladder before writing code — shortest correct diff wins, but never cut validation, data-loss handling, security, or accessibility
