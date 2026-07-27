@@ -28,6 +28,18 @@ async function run() {
 
   fs.mkdirSync(outputDir, { recursive: true });
 
+  // Keep .brozicode/ out of the user's git status without touching their
+  // .gitignore (which is a tracked file we have no business editing).
+  try {
+    const exclude = path.join(projectDir, '.git', 'info', 'exclude');
+    if (fs.existsSync(path.dirname(exclude))) {
+      const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+      if (!cur.includes('.brozicode/')) {
+        fs.appendFileSync(exclude, `${cur.endsWith('\n') || !cur ? '' : '\n'}.brozicode/\n`, 'utf8');
+      }
+    }
+  } catch { /* best effort */ }
+
   // ── 0. Skip if map is fresh (< 30 min) ──────────────────────────────────
   try {
     const stat  = fs.statSync(mapPath);
@@ -42,11 +54,20 @@ async function run() {
   // ── 1. Find all JS/TS source files ──────────────────────────────────────────
   let files = [];
   try {
+    // Build output has no import edges, so every artifact ties at baseline
+    // PageRank and floods the top-30 by tie-break. Excluding only
+    // node_modules/.git/dist/build left .next chunks as ~2/3 of the map.
+    const PRUNE = [
+      'node_modules', '.git', 'dist', 'build', '.brozicode', '.next', 'out',
+      'target', 'vendor', 'coverage', '.venv', 'venv', '__pycache__',
+      '.turbo', '.cache', '.svelte-kit', '.nuxt', '.output',
+    ];
+    const pruneExpr = PRUNE.map(d => `-name "${d}"`).join(' -o ');
     const found = execSync(
-      `find . -type f \\( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \\)` +
-      ` ! -path "*/node_modules/*" ! -path "*/.git/*" ! -name "bundle.js"` +
-      ` ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.brozicode/*"`,
-      { cwd: projectDir, encoding: 'utf8', timeout: 8_000 }
+      `find . \\( ${pruneExpr} \\) -prune -o` +
+      ` -type f \\( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \\)` +
+      ` ! -name "bundle.js" ! -name "*.min.js" -print`,
+      { cwd: projectDir, encoding: 'utf8', timeout: 15_000, maxBuffer: 8 * 1024 * 1024 }
     );
     files = found.trim().split('\n').filter(Boolean)
       .map(f => path.resolve(projectDir, f));
@@ -128,9 +149,13 @@ async function run() {
     const out  = [];
     const seen = new Set();
 
-    code.split('\n').forEach((line, i) => {
-      const t = line.trim();
-      if (t.length === 0 || t.length > 120) return;
+    // for-loop, not forEach: `return` inside a forEach callback only ends that
+    // iteration, so the 20-symbol cap below never actually capped anything.
+    const srcLines = code.split('\n');
+    for (let i = 0; i < srcLines.length; i++) {
+      if (out.length >= 20) break;
+      const t = srcLines[i].trim();
+      if (t.length === 0 || t.length > 120) continue;
       if (
         t.startsWith('export ')         ||
         t.startsWith('function ')       ||
@@ -144,8 +169,7 @@ async function run() {
           out.push(`  ${i + 1}: ${sig}`);
         }
       }
-      if (out.length >= 20) return;
-    });
+    }
 
     return out.length ? out : ['  (no exports found)'];
   }

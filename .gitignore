@@ -4,3 +4,7 @@ server/dist/
 .DS_Store
 /tmp/
 brozicode-session.json
+
+# BroziCode writes its repo map and per-session compaction snapshots here, in
+# whatever project it runs in. Never commit them.
+.brozicode/
