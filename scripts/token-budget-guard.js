@@ -10,12 +10,17 @@ import path from 'path';
 // Configurable via BROZICODE_TOKEN_BUDGET env var; defaults to 150k (a reasonable
 // warn threshold under a 200k context window). tokensConsumed is now measured from
 // real tool-response sizes, so these thresholds reflect actual context fill.
+// NOTE: this is a heuristic against a FIXED budget, not a real context-window
+// reading — the hook payload doesn't carry one. On a large-context model the
+// default fires while most of the window is still free, and nagging someone into
+// /compact costs them context for nothing. Hence: conservative default, wording
+// that admits it's an estimate, and each threshold announced at most once.
 const SESSION_BUDGET = Number(process.env.BROZICODE_TOKEN_BUDGET) || 150_000; // tokens
 
 const THRESHOLDS = [
-  { pct: 0.90, icon: '🚨', msg: '~90% context used. Run /compact NOW to preserve work.' },
-  { pct: 0.70, icon: '🔴', msg: '~70% context used. Recommend /compact before continuing.' },
-  { pct: 0.50, icon: '⚠️ ', msg: '~50% context used. Consider /compact if current task is done.' },
+  { pct: 0.90, icon: '🚨', msg: '/compact soon to avoid losing working context.' },
+  { pct: 0.70, icon: '🔴', msg: 'consider /compact before starting anything large.' },
+  { pct: 0.50, icon: '⚠️ ', msg: 'consider /compact if the current task is done.' },
 ];
 
 let input = '';
@@ -42,9 +47,22 @@ process.stdin.on('end', () => {
 
   for (const { pct, icon, msg } of THRESHOLDS) {
     if (ratio >= pct) {
+      // Announce each threshold once. Re-warning on every prompt trains the user
+      // to ignore it, and costs tokens to do so.
+      if ((sessData.warnedThreshold || 0) >= pct) break;
+      try {
+        sessData.warnedThreshold = pct;
+        const tmp = sessFile + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(sessData), 'utf8');
+        fs.renameSync(tmp, sessFile);
+      } catch { /* best effort */ }
+
       const usedK   = Math.round(consumed / 1000);
       const budgetK = Math.round(SESSION_BUDGET / 1000);
-      process.stdout.write(`\n${icon} BROZICODE: ${usedK}k/${budgetK}k tokens — ${msg}\n`);
+      process.stdout.write(
+        `\n${icon} BROZICODE: ~${usedK}k tokens of tool output this session ` +
+        `(heuristic budget ${budgetK}k, set BROZICODE_TOKEN_BUDGET to change) — ${msg}\n`
+      );
       break; // Only show highest threshold
     }
   }

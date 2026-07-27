@@ -46,14 +46,27 @@ process.stdin.on('end', () => {
   // Tools that indicate the agent fell back to native ops despite brozi hooks
   const NATIVE_FALLBACK_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'Grep', 'Glob', 'NotebookEdit']);
 
-  if (command === 'init') {
-    // Bump the session epoch so the long-lived MCP server drops its cross-session
-    // stale-read ledger (otherwise it reports files as "in-context" that were never
-    // shown in this conversation).
+  function bumpEpoch() {
     try {
       const epochFile = path.join(os.tmpdir(), 'brozicode-session-epoch');
       fs.writeFileSync(epochFile, `${sessionId}:${Date.now()}`, 'utf8');
     } catch { /* ignore */ }
+  }
+
+  if (command === 'epoch') {
+    // Compaction wipes file content from the context while the MCP server's
+    // stale-read ledger still believes it was served — so the post-compact
+    // "restore" step came back with nothing. Bump the epoch to clear it,
+    // WITHOUT resetting the session's savings counters the way 'init' does.
+    bumpEpoch();
+    process.exit(0);
+  }
+
+  if (command === 'init') {
+    // Bump the session epoch so the long-lived MCP server drops its cross-session
+    // stale-read ledger (otherwise it reports files as "in-context" that were never
+    // shown in this conversation).
+    bumpEpoch();
 
     // SessionStart — initialize fresh savings file
     saveSavings({

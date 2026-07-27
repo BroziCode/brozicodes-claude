@@ -1,92 +1,67 @@
 #!/usr/bin/env node
-// BroziCode PostToolUse Response Rewriter
-// Intercepts tool results and compresses them before they enter Claude's context window.
+// BroziCode PostToolUse nudge (Bash / Read)
 //
-//   Bash  → strip ANSI, truncate to 100 lines (preserve error/warning lines)
-//   Read  → JS/TS files >100 lines: header + first 80 lines + skeleton suggestion
-//           any file >200 lines: truncate with omission notice
+// HISTORY / WHY THIS IS SMALL NOW:
+// This script used to claim it rewrote verbose tool output — strip ANSI, truncate
+// Bash to 100 lines, Read to 200 — by printing {"type":"result","content":…}.
+// That field is not part of the PostToolUse hook contract and Claude Code ignored
+// it: a tool result is already produced and delivered by the time PostToolUse
+// fires, so a PostToolUse hook cannot replace it. Verified against a 300-line
+// Bash command — every line still entered the context untouched. The compression
+// never happened; the script was dead weight running on every Bash and Read call.
 //
-// Writes {"type": "result", "content": "..."} to stdout to replace the result,
-// or exits 0 with no output to pass the result through unchanged.
+// Truncation has to happen where the output is produced, which is brozi_run
+// (it intercepts >100 lines into a queryable store). So all this hook can
+// honestly do is point the caller at brozi_run the first time they take the
+// expensive path — once per session, via the supported additionalContext field.
 
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
-const ANSI_RE  = /\x1B\[[0-9;]*[mGKHFJK]/g;
-const ERROR_RE = /error\s*TS\d+|^\s*(Error|TypeError|SyntaxError|ReferenceError|Warning):|FAIL\s|✗|✕|\bfailed\b|\bERROR\b/i;
-
-function stripAnsi(s)   { return s.replace(ANSI_RE, ''); }
-function isErrorLine(l) { return ERROR_RE.test(l); }
-function passThrough()  { process.exit(0); }
-function rewrite(content) {
-  process.stdout.write(JSON.stringify({ type: 'result', content }) + '\n');
-  process.exit(0);
-}
-
-/** Returns compressed string if lines > maxLines, or null if no change needed. */
-function truncateLines(text, maxLines, keepErrors) {
-  const lines = text.split('\n');
-  if (lines.length <= maxLines) return null;
-
-  const head   = lines.slice(0, maxLines);
-  const tail   = lines.slice(maxLines);
-  let   result = head.join('\n');
-  result      += `\n  … [${tail.length} line${tail.length !== 1 ? 's' : ''} omitted]`;
-
-  if (keepErrors) {
-    const errs = tail.filter(isErrorLine);
-    if (errs.length > 0) result += '\n  … [errors from omitted section:]\n' + errs.join('\n');
-  }
-
-  return result;
-}
+const BIG_OUTPUT_LINES = 150;
 
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
   let event = {};
-  try { event = JSON.parse(input); } catch { passThrough(); }
+  try { event = JSON.parse(input); } catch { process.exit(0); }
 
   const toolName = event.tool_name || '';
+  if (toolName !== 'Bash' && toolName !== 'Read') process.exit(0);
 
-  // Never rewrite brozi_* tool outputs
-  if (toolName.includes('brozi_')) passThrough();
+  const raw = event.tool_response ?? event.tool_result ?? event.output ?? event.result ?? '';
+  const text = typeof raw === 'string' ? raw
+    : typeof raw?.content === 'string' ? raw.content
+    : raw ? JSON.stringify(raw) : '';
 
-  // Extract tool response (multiple field names for compatibility)
-  const raw      = event.tool_response ?? event.tool_result ?? event.output ?? event.result ?? '';
-  const response = typeof raw === 'string'   ? raw
-    : raw?.content ? (typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content))
-    : typeof raw === 'object' ? JSON.stringify(raw)
-    : '';
+  let lineCount = 0;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineCount++;
+  if (lineCount < BIG_OUTPUT_LINES) process.exit(0);
 
-  if (!response) passThrough();
-
-  if (toolName === 'Bash') {
-    const cleaned   = stripAnsi(response);
-    const rewritten = truncateLines(cleaned, 100, true);
-    if (rewritten) rewrite(rewritten);
-    else passThrough();
-
-  } else if (toolName === 'Read') {
-    const filePath = event.tool_input?.file_path || event.tool_input?.path || '';
-    const ext      = path.extname(filePath).slice(1).toLowerCase();
-    const isJsTs   = ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext);
-    const lines    = response.split('\n');
-
-    if (isJsTs && lines.length > 100) {
-      rewrite(
-        `[BroziCode: ${path.basename(filePath)} has ${lines.length} lines — showing first 80]\n` +
-        `[For AST skeleton: brozi_smart_search({ file_glob_patterns: ["${filePath}"], summary: true })]\n\n` +
-        lines.slice(0, 80).join('\n') +
-        `\n  … [${lines.length - 80} lines omitted]`
-      );
-    } else {
-      const rewritten = truncateLines(response, 200, false);
-      if (rewritten) rewrite(rewritten + '\n  [use brozi_smart_search with #N-M ranges for targeted reads]');
-      else passThrough();
-    }
-
-  } else {
-    passThrough();
+  // Once per session — a nudge repeated after every large output costs more
+  // tokens than it saves.
+  const sessionId = event.session_id || 'default';
+  const flagFile  = path.join(os.tmpdir(), `brozicode-nudge-${sessionId}-${toolName}`);
+  try {
+    fs.writeFileSync(flagFile, '1', { flag: 'wx' });   // fails if it already exists
+  } catch {
+    process.exit(0);
   }
+
+  const advice = toolName === 'Bash'
+    ? 'brozi_run intercepts outputs over 100 lines into a queryable store instead of ' +
+      'putting them in context: brozi_run({ command }) then brozi_run({ command, query: "pattern" }).'
+    : 'brozi_smart_search returns AST skeletons (summary: true) or line ranges ("path#40-90") ' +
+      'instead of whole files.';
+
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PostToolUse',
+      additionalContext:
+        `⚡ BROZICODE: that ${toolName} call put ~${lineCount} lines into the context window. ${advice}`,
+    },
+  }) + '\n');
+  process.exit(0);
 });

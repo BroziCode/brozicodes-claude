@@ -8,7 +8,59 @@ import fg from 'fast-glob';
 // ─── In-process file cache ────────────────────────────────────────────────────
 // Persists across all tool calls within the same Node.js session (shared module state).
 // Each entry: { mtime: number, content: string, skeletons: Map<optKey, skeletonResult> }
-const fileCache = new Map();
+//
+// BOUNDED. This process is long-lived (outlives conversations), so an unbounded
+// cache of full file contents + ASTs is an OOM waiting to happen — one 1.1MB
+// minified bundle costs ~37MB of heap once parsed. Evict oldest-first on both
+// entry count and total retained bytes.
+const fileCache        = new Map();
+const CACHE_MAX_ENTRIES = 300;
+const CACHE_MAX_BYTES   = 64 * 1024 * 1024;
+let   cacheBytes        = 0;
+
+/** Read through the cache, refreshing LRU recency on hit. */
+function cacheGet(fp) {
+  const hit = fileCache.get(fp);
+  if (!hit) return undefined;
+  fileCache.delete(fp);   // re-insert to move to the newest end
+  fileCache.set(fp, hit);
+  return hit;
+}
+
+function cacheSet(fp, entry) {
+  const prev = fileCache.get(fp);
+  if (prev) { cacheBytes -= prev.content.length; fileCache.delete(fp); }
+  fileCache.set(fp, entry);
+  cacheBytes += entry.content.length;
+  while (fileCache.size > CACHE_MAX_ENTRIES || cacheBytes > CACHE_MAX_BYTES) {
+    const oldest = fileCache.keys().next().value;
+    if (oldest === undefined) break;
+    cacheBytes -= fileCache.get(oldest).content.length;
+    fileCache.delete(oldest);
+  }
+}
+
+// Reading a 200MB log or a .png as utf8 is never useful and is the fastest way
+// to kill the server. Cap it and say so instead.
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+/** Cheap binary sniff — a NUL byte in the first 8KB. Scanned by char code so
+ *  this source file doesn't have to contain a NUL and flag itself. */
+function isBinary(content) {
+  const n = Math.min(content.length, 8192);
+  for (let i = 0; i < n; i++) if (content.charCodeAt(i) === 0) return true;
+  return false;
+}
+
+// Build output, vendored deps and virtualenvs are never what the caller meant,
+// and skeletonizing minified chunks is what blows up memory. node_modules/.git
+// alone was not nearly enough.
+const IGNORE_GLOBS = [
+  '**/node_modules/**', '**/.git/**', '**/.next/**', '**/dist/**', '**/build/**',
+  '**/out/**', '**/target/**', '**/vendor/**', '**/coverage/**', '**/.venv/**',
+  '**/venv/**', '**/__pycache__/**', '**/.turbo/**', '**/.cache/**',
+  '**/.svelte-kit/**', '**/.nuxt/**', '**/*.min.js', '**/*.bundle.js',
+];
 
 // P3: Tracks files already returned to Claude's context this session.
 // Prevents re-injecting unchanged file content and refilling the context window.
@@ -503,9 +555,24 @@ async function handler({
   let reFlags = 'g';
   if (ignore_case) reFlags += 'i';
   if (multiline)   reFlags += 'm';
-  const contentRe = content_regex ? new RegExp(content_regex, reFlags) : null;
+  let contentRe = null;
+  if (content_regex) {
+    try {
+      contentRe = new RegExp(content_regex, reFlags);
+    } catch (err) {
+      return { content: [{
+        type: 'text',
+        text: `Invalid content_regex: ${err.message}\n` +
+              `Escape regex metacharacters — ( ) [ ] { } * + ? | \\ — or simplify the pattern.`,
+      }] };
+    }
+  }
 
-  const useContext = contentRe && (lines_before > 0 || lines_after > 0);
+  // A content_regex ALWAYS means "show me the matching lines". This used to be
+  // gated on lines_before/after > 0, so a plain grep silently fell through to the
+  // skeleton path and came back with zero matches — the single biggest reason to
+  // give up and reach for `Bash grep`.
+  const useContext = !!contentRe && !summary;
 
   // 1. Expand all glob patterns in parallel
   const patternResults = await Promise.all(
@@ -516,7 +583,7 @@ async function handler({
         cwd:      isAbsolutePattern ? '/' : projectDir,
         absolute: true,
         dot:      true,
-        ignore:   ['**/node_modules/**', '**/.git/**'],
+        ignore:   IGNORE_GLOBS,
       });
       return { matches, lineStart, lineEnd };
     })
@@ -556,14 +623,17 @@ async function handler({
         if (output_mode === 'file_paths_only') return { fp, content: '', mtime };
 
         // Cache hit — serve without re-reading disk
-        const cached = fileCache.get(fp);
+        const cached = cacheGet(fp);
         if (cached && cached.mtime === mtime) {
           return { fp, content: cached.content, mtime };
         }
 
+        if (stat.size > MAX_FILE_BYTES) return { fp, content: '', mtime, tooBig: stat.size };
+
         // Cache miss — read from disk and populate cache
         const content = await fs.readFile(fp, 'utf8');
-        fileCache.set(fp, { mtime, content, skeletons: new Map() });
+        if (isBinary(content)) return { fp, content: '', mtime, binary: true };
+        cacheSet(fp, { mtime, content, skeletons: new Map() });
         return { fp, content, mtime };
       } catch {
         return null;
@@ -606,16 +676,35 @@ async function handler({
     if (!entry) continue;
     const { fp, content, mtime } = entry;
 
+    if (entry.tooBig || entry.binary) {
+      const why = entry.binary
+        ? 'binary file'
+        : `${Math.round(entry.tooBig / 1024)}KB exceeds the ${Math.round(MAX_FILE_BYTES / 1024)}KB read cap — use a #N-M range`;
+      sections.push(`### ${relativize(fp, projectDir)}\n[skipped — ${why}]`);
+      continue;
+    }
+
     // Split lines once per file — reused across all processing paths below
     const contentLines = content.split('\n');
 
-    // Content regex filter / match counting
+    // Content regex filter / match counting.
+    // Counted with a loop, NOT [...matchAll()] — materialising every match object
+    // just to call .length on it spikes memory on broad patterns over big files.
     let matchCount = 0;
     if (contentRe) {
       contentRe.lastIndex = 0;
-      const allMatches = [...content.matchAll(contentRe)];
-      if (allMatches.length === 0) continue;
-      matchCount = allMatches.length;
+      let guard = -1;
+      while (contentRe.exec(content) !== null) {
+        matchCount++;
+        // A zero-width match (e.g. /x*/) leaves lastIndex where it was — without
+        // this the loop never terminates and takes the whole server with it.
+        if (contentRe.lastIndex === guard) { contentRe.lastIndex++; }
+        guard = contentRe.lastIndex;
+        if (contentRe.lastIndex >= content.length) break;
+        if (matchCount > 100_000) break;             // pathological pattern guard
+      }
+      contentRe.lastIndex = 0;
+      if (matchCount === 0) continue;
     }
 
     matchCounts.push({ fp, matchCount });
@@ -636,6 +725,12 @@ async function handler({
 
     // ── Build the section string ──────────────────────────────────────────
     let section;
+    // The stale-read ledger must only be written for content that ACTUALLY
+    // reaches the caller. Recording it inline (as before) meant a file dropped by
+    // the 150KB response guard, or truncated by lines_per_file, was still flagged
+    // "already in context" forever — permanently unreadable until its mtime moved.
+    let recordReturn = false;
+    let truncated    = false;
 
     if (summary) {
       try {
@@ -664,9 +759,7 @@ async function handler({
           section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${buildResponse(fp, skeleton, projectDir)}`;
         }
         // Record full-file skeleton returns for stale detection
-        if (lineStart === null && skeleton && skeleton.sorted.length > 0) {
-          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
-        }
+        if (lineStart === null && skeleton && skeleton.sorted.length > 0) recordReturn = true;
       } catch {
         const sliced = sliceLines(contentLines, lineStart, lineEnd);
         section = `### ${relativize(fp, projectDir)}${rangeLabel}\n${addLineNumbers(sliced, lineStart ?? 1)}`;
@@ -693,10 +786,23 @@ async function handler({
       if (lineStart === null && !useContext && returnedFiles.has(fp)) {
         const prev = returnedFiles.get(fp);
         if (prev.mtime === mtime) {
+          // Never answer with a bare "you already have this" notice. This ledger is
+          // process-wide, but a context is not: subagents share this server without
+          // sharing the parent's context, and compaction wipes content the ledger
+          // still believes is present. Both cases were left with literally nothing.
+          // Always hand back the skeleton so the caller can navigate and slice.
+          let stale = null;
+          try {
+            stale = trimSkeleton(
+              buildSkeleton(content, fp, { includeImports, includeTypes, includePrivate }),
+              max_skeleton_lines,
+            );
+          } catch { /* no skeleton for this language — notice only */ }
           section =
             `### ${relativize(fp, projectDir)}\n` +
-            `[in-context — unchanged since ${prev.isoTime}. ` +
-            `Skip: if_modified_since:"${prev.isoTime}" | Slice: #N-M | Skeleton: summary:true]`;
+            `[already served this session, unchanged since ${prev.isoTime} — skeleton only.\n` +
+            ` Full text: add a #N-M range. Skip entirely: if_modified_since:"${prev.isoTime}"]` +
+            (stale?.sorted?.length ? `\n${buildResponse(fp, stale, projectDir)}` : '');
         }
       }
 
@@ -720,7 +826,7 @@ async function handler({
             const note = `⚡auto-skeleton (${contentLines.length} lines — add summary:true or a #N-M range to silence this)`;
             section = `### ${relativize(fp, projectDir)} ${note}\n${buildResponse(fp, skeleton, projectDir)}`;
             // Record this auto-skeleton return for stale detection
-            returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
+            recordReturn = true;
           }
           // skeleton empty → leave section null; plain-content path below handles it
         } catch {
@@ -731,17 +837,20 @@ async function handler({
       if (!section) {
         // Standard plain-content path: slice, apply limits, add line numbers
         let fileLines = sliceLines(contentLines, lineStart, lineEnd);
-        if (max_line_length > 0) fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+        if (max_line_length > 0) {
+          const before = fileLines;
+          fileLines = fileLines.map(l => truncateLine(l, max_line_length));
+          if (fileLines.some((l, i) => l !== before[i])) truncated = true;
+        }
         if (lines_per_file > 0 && fileLines.length > lines_per_file) {
           fileLines = fileLines.slice(0, lines_per_file);
           fileLines.push(`  … (truncated at ${lines_per_file} lines)`);
+          truncated = true;
         }
         const lineInfo = lineStart !== null ? ` (lines ${lineStart}–${lineEnd})` : '';
         section = `### ${relativize(fp, projectDir)}${lineInfo}\n${addLineNumbers(fileLines, lineStart ?? 1)}`;
-        // Record full-file plain returns for stale detection
-        if (lineStart === null && !useContext) {
-          returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
-        }
+        // Record full-file plain returns for stale detection — never a partial one
+        if (lineStart === null && !useContext && !truncated) recordReturn = true;
       }
     }
 
@@ -764,6 +873,8 @@ async function handler({
 
     sections.push(section);
     responseSize += section.length + 2;
+    // Only now — the section is definitely going back to the caller.
+    if (recordReturn) returnedFiles.set(fp, { mtime, isoTime: new Date(mtime).toISOString() });
   }
 
   // ── match_count mode ─────────────────────────────────────────────────────

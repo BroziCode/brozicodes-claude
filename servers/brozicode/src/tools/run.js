@@ -6,7 +6,10 @@ const execAsync = promisify(exec);
 
 // ─── ANSI stripping ───────────────────────────────────────────────────────────
 
-const ANSI_RE = /\x1B\[[0-9;]*[mGKHFJK]/g;
+// Full CSI (incl. private-mode params like \x1B[?25l), OSC (window titles),
+// and single-char escapes. The old pattern only handled a handful of CSI final
+// bytes, so progress bars and spinners still came through as garbage.
+const ANSI_RE = /[\x1B\x9B](?:\[[0-?]*[ -\/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])/g;
 
 function stripAnsi(str) {
   return str.replace(ANSI_RE, '');
@@ -25,8 +28,11 @@ function isErrorLine(line) {
 // Model queries stored output with: brozi_run({ command, query: "pattern" })
 
 const outputStore = new Map(); // cmdKey → { command, lines, storedAt }
-const OUTPUT_STORE_MAX = 50;
-const STORE_THRESHOLD  = 100; // lines
+const OUTPUT_STORE_MAX       = 50;
+const STORE_THRESHOLD        = 100;               // lines
+const STORE_MAX_LINES        = 50_000;            // per command
+const STORE_MAX_TOTAL_BYTES  = 32 * 1024 * 1024;  // across the whole store
+let   storeBytes             = 0;
 
 function cmdKey(cmd) {
   let h = 0;
@@ -34,12 +40,35 @@ function cmdKey(cmd) {
   return Math.abs(h).toString(36);
 }
 
+function sizeOf(lines) {
+  let n = 0;
+  for (const l of lines) n += l.length + 1;
+  return n;
+}
+
 function storeOutput(key, command, lines) {
-  if (outputStore.size >= OUTPUT_STORE_MAX) {
-    // LRU eviction — remove oldest entry
-    outputStore.delete(outputStore.keys().next().value);
+  // A single maxBuffer-sized run can be millions of lines; 50 of those pinned
+  // in a long-lived process is hundreds of MB. Cap per-entry and in aggregate.
+  let kept = lines;
+  if (lines.length > STORE_MAX_LINES) {
+    const head = lines.slice(0, STORE_MAX_LINES - 1000);
+    const tail = lines.slice(-1000);
+    kept = [...head, `  … [${lines.length - STORE_MAX_LINES} lines dropped from the middle of the stored output]`, ...tail];
   }
-  outputStore.set(key, { command, lines, storedAt: Date.now() });
+
+  const prev = outputStore.get(key);
+  if (prev) { storeBytes -= sizeOf(prev.lines); outputStore.delete(key); }
+
+  outputStore.set(key, { command, lines: kept, storedAt: Date.now() });
+  storeBytes += sizeOf(kept);
+
+  // Insertion order == recency, because every set() is preceded by a delete().
+  while (outputStore.size > OUTPUT_STORE_MAX || storeBytes > STORE_MAX_TOTAL_BYTES) {
+    const oldest = outputStore.keys().next().value;
+    if (oldest === undefined || oldest === key) break;
+    storeBytes -= sizeOf(outputStore.get(oldest).lines);
+    outputStore.delete(oldest);
+  }
 }
 
 // ─── Output compressor (for small outputs) ────────────────────────────────────
@@ -65,7 +94,7 @@ function compressOutput(text, maxLines, keepErrors) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-async function handler({ command, keep_errors, max_lines, strip_ansi, query }) {
+async function handler({ command, keep_errors, max_lines, strip_ansi, query, timeout_ms }) {
   const startMs = Date.now();
   const key     = cmdKey(command);
 
@@ -131,7 +160,9 @@ async function handler({ command, keep_errors, max_lines, strip_ansi, query }) {
       cwd:       process.env.CLAUDE_PROJECT_DIR || process.cwd(),
       shell:     true,
       maxBuffer: 10 * 1024 * 1024,
-      timeout:   60_000,
+      // Was a hard 60s. Real test/build suites run longer, and every timeout
+      // looked like a failure — which taught the caller to prefer native Bash.
+      timeout:   timeout_ms,
     });
 
     let combined = '';
@@ -175,8 +206,12 @@ async function handler({ command, keep_errors, max_lines, strip_ansi, query }) {
 
     const text    = compressOutput(out.trimEnd(), max_lines, keep_errors);
     const elapsed = Date.now() - startMs;
+    // A timeout kill reports no exit code; calling it "exit 1" hid the real cause.
+    const status  = err.killed || err.signal
+      ? `timed out after ${timeout_ms}ms (killed${err.signal ? ` — ${err.signal}` : ''}) — raise timeout_ms if the command legitimately runs longer`
+      : `exit ${err.code ?? 1}`;
     return {
-      content: [{ type: 'text', text: `$ ${command}  [${elapsed}ms, exit ${err.code ?? 1}]\n${text || '(no output)'}` }],
+      content: [{ type: 'text', text: `$ ${command}  [${elapsed}ms, ${status}]\n${text || '(no output)'}` }],
     };
   }
 }
@@ -196,6 +231,7 @@ Params:
   keep_errors  – preserve error/warning lines when truncating small outputs (default: true)
   max_lines    – max lines to return for small outputs <100 lines (default: 50)
   strip_ansi   – remove ANSI escape codes (default: true)
+  timeout_ms   – kill after N ms (default 120000, max 600000) — raise for long builds
 
 Two-step pattern for large outputs:
   1. brozi_run({ command: "npm test" })                     ← captures, returns summary
@@ -206,6 +242,8 @@ Two-step pattern for large outputs:
       keep_errors: z.boolean().default(true).describe('Keep error/warning lines when truncating small outputs.'),
       max_lines:   z.number().int().min(1).default(50).describe('Max output lines for outputs under threshold.'),
       strip_ansi:  z.boolean().default(true).describe('Strip ANSI escape codes from output.'),
+      timeout_ms:  z.number().int().min(1000).max(600_000).default(120_000)
+        .describe('Kill the command after this many ms (default 120000, max 600000). Raise it for long builds/test suites.'),
     },
     handler,
   );

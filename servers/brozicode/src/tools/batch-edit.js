@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { createPatch, applyPatch } from 'diff';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
@@ -9,13 +8,6 @@ const execAsync = promisify(exec);
 
 // ─── Matching ────────────────────────────────────────────────────────────────
 
-function normalizeWhitespace(str) {
-  return str
-    .replace(/\r\n/g, '\n')
-    .replace(/\t/g, '  ')
-    .replace(/[ \t]+$/gm, '')
-    .trim();
-}
 
 export function applyEditToContent(fileContent, oldContent, newContent, filePath) {
   // Tier 1: Exact match — index-spliced (NOT String.replace).
@@ -35,47 +27,78 @@ export function applyEditToContent(fileContent, oldContent, newContent, filePath
     return { success: true, result };
   }
 
-  // Tier 2: Whitespace-normalized match
-  const normalizedFile = normalizeWhitespace(fileContent);
-  const normalizedOld  = normalizeWhitespace(oldContent);
+  // Tier 2: indentation-insensitive line match.
+  //
+  // This used to be gated behind a normalizeWhitespace(file).includes(old) check
+  // that almost never passed — normalizeWhitespace trims the string as a whole but
+  // not each line, so any block indented differently from the caller's copy fell
+  // straight through to the old fuzzy-patch tier. That tier applied hunks with
+  // fuzzFactor 2 and trim-only line comparison, which is how a block that appears
+  // in two classes got silently rewritten in the WRONG one, and how replacements
+  // landed at the wrong indentation (a SyntaxError in Python/YAML). The scan runs
+  // unconditionally now, refuses ambiguity like Tier 1 does, and re-indents.
+  const fileLines = fileContent.split('\n');
+  const oldLines  = oldContent.trim().split('\n').map(l => l.trim());
+  const needle    = oldLines.join('\n');
 
-  if (normalizedFile.includes(normalizedOld)) {
-    const fileLines = fileContent.split('\n');
-    const oldLines  = oldContent.trim().split('\n').map(l => l.trim());
-
+  if (needle !== '') {
+    const hits = [];
     for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
       const slice = fileLines.slice(i, i + oldLines.length).map(l => l.trim());
-      if (slice.join('\n') === oldLines.join('\n')) {
-        const before = fileLines.slice(0, i);
-        const after  = fileLines.slice(i + oldLines.length);
-        return {
-          success: true,
-          result: [...before, ...newContent.split('\n'), ...after].join('\n'),
-        };
-      }
+      if (slice.join('\n') === needle) hits.push(i);
+    }
+
+    if (hits.length > 1) {
+      return {
+        success: false,
+        error: buildAmbiguityError(fileContent, oldContent, hits.length) +
+               `\n   (matches ignoring indentation start at lines: ${hits.map(i => i + 1).join(', ')})`,
+      };
+    }
+
+    if (hits.length === 1) {
+      const i      = hits[0];
+      const before = fileLines.slice(0, i);
+      const after  = fileLines.slice(i + oldLines.length);
+      return {
+        success: true,
+        result: [...before, ...reindent(newContent, fileLines[i], oldContent), ...after].join('\n'),
+      };
     }
   }
 
-  // Tier 3: diff library fuzzy patch
-  try {
-    const patch  = createPatch(path.basename(filePath), oldContent, newContent);
-    const result = applyPatch(fileContent, patch, {
-      fuzzFactor: 2,
-      compareLine: (_lineNum, line, _op, patchContent) =>
-        line.trim() === patchContent.trim(),
-    });
-    if (result !== false) {
-      return { success: true, result };
-    }
-  } catch (_) {
-    // fall through to failure
-  }
-
+  // No Tier 3. There used to be a `diff` fuzzy-patch fallback here; with fuzz it
+  // silently misplaced edits, and without fuzz it can do nothing Tier 2 can't.
+  // Failing with a precise "here is the text you should have sent" beats guessing.
   const nearestMatch = findNearestMatch(fileContent, oldContent);
   return {
     success: false,
     error: buildMatchError(fileContent, oldContent, nearestMatch),
   };
+}
+
+/**
+ * Re-indent newContent to sit where the matched block sat.
+ *
+ * Tier 2 matches on trimmed lines, so the caller's oldContent (and therefore its
+ * newContent) is frequently unindented. Splicing it in verbatim dumped the
+ * replacement at column 0 — cosmetic in JS, a SyntaxError in Python or YAML.
+ * Shift by the difference between the file's indentation and the caller's.
+ */
+function reindent(newContent, matchedFirstLine, oldContent) {
+  const fileIndent = (matchedFirstLine.match(/^[ \t]*/) || [''])[0];
+  const oldFirst   = oldContent.replace(/^\n+/, '').split('\n')[0] ?? '';
+  const oldIndent  = (oldFirst.match(/^[ \t]*/) || [''])[0];
+  const lines      = newContent.split('\n');
+
+  if (fileIndent === oldIndent) return lines;
+
+  return lines.map(line => {
+    if (line.trim() === '') return line;
+    // Caller already matched the file's indentation on this line — leave it.
+    if (oldIndent && line.startsWith(oldIndent)) return fileIndent + line.slice(oldIndent.length);
+    return fileIndent + line;
+  });
 }
 
 function findNearestMatch(fileContent, oldContent) {
@@ -177,10 +200,17 @@ async function findProjectRoot(filePath) {
   return path.dirname(path.resolve(filePath)); // fallback
 }
 
+/** POSIX single-quote escaping — the only safe way to put a path in a shell string. */
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
 async function runValidation(validate, editedFiles) {
-  if (validate === 'none') return null;
+  if (validate === 'none' || editedFiles.length === 0) return null;
   const projectRoot = await findProjectRoot(editedFiles[0]);
-  const escaped     = editedFiles.map(f => `"${f}"`).join(' ');
+  // Was `"${f}"` — a path containing a double quote, backtick or $( ) escaped the
+  // string and ran as a command. Filenames are caller-supplied.
+  const escaped     = editedFiles.map(shellQuote).join(' ');
 
   const cmds = {
     tsc:    'npx --no-install tsc --noEmit 2>&1',
@@ -318,9 +348,10 @@ async function handler({ edits, validate, stopOnFirstError }) {
   }
 
   // 3. Apply all edits to in-memory copies
-  const results  = [];
-  const modified = new Map(fileContents);
-  let aborted    = false;
+  const results         = [];
+  const modified        = new Map(fileContents);
+  const wholeFileWrites = new Set();
+  let aborted           = false;
 
   for (const [filePath, editsForFile] of fileEdits.entries()) {
     if (aborted) break;
@@ -331,8 +362,21 @@ async function handler({ edits, validate, stopOnFirstError }) {
 
       if (isCreate) {
         if (isOverwrite || isNewFile.has(filePath)) {
+          // Two whole-file writes to the same path in one batch: the second
+          // silently discarded the first while both were reported as applied.
+          if (wholeFileWrites.has(filePath)) {
+            results.push({
+              success: false,
+              file: edit.file,
+              error: `Two whole-file writes target this path in one batch — the first would be ` +
+                     `silently discarded.\n   → Combine them into ONE edit with the full final content.`,
+            });
+            if (stopOnFirstError) { aborted = true; break; }
+            continue;
+          }
+          wholeFileWrites.add(filePath);
           modified.set(filePath, edit.newContent);
-          results.push({ success: true, file: edit.file });
+          results.push({ success: true, file: edit.file, created: isNewFile.has(filePath), resolved: filePath });
         } else {
           results.push({
             success: false,
@@ -360,7 +404,9 @@ async function handler({ edits, validate, stopOnFirstError }) {
   }
 
   // 4. Write changed files in parallel
-  const failures = results.filter(r => !r.success);
+  const failures    = results.filter(r => !r.success);
+  const writeErrors = [];
+  let   writtenOk   = [];
   if (failures.length === 0 || !stopOnFirstError) {
     const filesToWrite = stopOnFirstError
       ? [...modified.keys()]
@@ -368,30 +414,77 @@ async function handler({ edits, validate, stopOnFirstError }) {
           path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file)
         ))];
 
-    await Promise.all(
-      filesToWrite
-        .filter(fp => modified.get(fp) !== fileContents.get(fp) || isNewFile.has(fp))
-        .map(async fp => {
-          await fs.mkdir(path.dirname(fp), { recursive: true });
-          await fs.writeFile(fp, modified.get(fp), 'utf8');
-        })
+    const targets = filesToWrite
+      .filter(fp => modified.get(fp) !== fileContents.get(fp) || isNewFile.has(fp));
+
+    // allSettled, not all: a single EACCES used to reject the whole handler, so
+    // the caller got a bare errno and no idea which files had ALREADY been written.
+    const settled = await Promise.allSettled(
+      targets.map(async fp => {
+        await fs.mkdir(path.dirname(fp), { recursive: true });
+        await fs.writeFile(fp, modified.get(fp), 'utf8');
+        return fp;
+      })
     );
+
+    settled.forEach((res, i) => {
+      if (res.status === 'fulfilled') writtenOk.push(targets[i]);
+      else writeErrors.push({ file: targets[i], message: res.reason?.message || String(res.reason) });
+    });
+
+    // An edit whose file could not be written did NOT succeed — demote it before
+    // the summary is built, so the header can't report "✓ Applied 2 edits" above a
+    // warning that one of them never reached disk.
+    if (writeErrors.length > 0) {
+      const failedPaths = new Set(writeErrors.map(e => e.file));
+      for (const r of results) {
+        if (!r.success) continue;
+        const abs = path.isAbsolute(r.file) ? r.file : path.resolve(projectDir, r.file);
+        if (failedPaths.has(abs)) {
+          r.success = false;
+          r.error   = `Edit applied in memory but the file could not be written:\n   ` +
+                      writeErrors.find(e => e.file === abs).message;
+        }
+      }
+    }
   }
 
   // 5. Run validation if all edits succeeded
+  const failedNow = results.filter(r => !r.success);
   let validationResult = null;
-  if (validate !== 'none' && failures.length === 0) {
-    const editedFiles = [...new Set(results.filter(r => r.success).map(r => r.file))];
-    validationResult = await runValidation(validate, editedFiles);
+  if (validate !== 'none' && failedNow.length === 0 && writeErrors.length === 0) {
+    // Resolved absolute paths — passing the caller's raw (possibly relative)
+    // strings made findProjectRoot resolve against the server's cwd, not the project.
+    validationResult = await runValidation(validate, writtenOk);
   }
 
   // 6. Build and return response
   const wrote        = failures.length === 0 || !stopOnFirstError;
-  const responseText = buildResponse(results, validationResult, edits.length, wrote);
+  let   responseText = buildResponse(results, validationResult, edits.length, wrote);
+
+  if (writeErrors.length > 0) {
+    responseText +=
+      `\n⚠ The batch is PARTIALLY applied — ${writtenOk.length} file(s) reached disk, ` +
+      `${writeErrors.length} did not.` +
+      (writtenOk.length
+        ? `\n  Already written (do NOT re-apply these):\n` +
+          writtenOk.map(f => `  ✓ ${f}`).join('\n')
+        : '') +
+      `\n  → Fix the permission/path problem, then resubmit ONLY the failed file(s).`;
+  }
+
+  // Surface where relative paths actually landed — CLAUDE_PROJECT_DIR is often a
+  // monorepo root, so a relative path can silently create a file in the wrong tree.
+  // Only for files that genuinely got written.
+  const created = results.filter(r => r.created && r.resolved && writtenOk.includes(r.resolved));
+  if (created.length > 0) {
+    responseText += `\n\nCreated new file(s):\n` +
+      created.map(r => `  + ${r.resolved}`).join('\n');
+  }
 
   return {
     content: [{ type: 'text', text: responseText }],
-    isError: failures.length > 0,
+    isError: results.some(r => !r.success) || writeErrors.length > 0,
   };
 }
 

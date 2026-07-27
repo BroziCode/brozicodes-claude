@@ -107,6 +107,17 @@ process.stdin.on('end', () => {
     fs.writeFileSync(tmp, snap, 'utf8');
     fs.renameSync(tmp, snapPath);
 
+    // One snapshot per session accumulated in the user's working tree forever.
+    // Keep the 5 newest.
+    try {
+      const old = fs.readdirSync(snapDir)
+        .filter(f => f.startsWith('snapshot-') && f.endsWith('.md'))
+        .map(f => ({ f, m: fs.statSync(path.join(snapDir, f)).mtimeMs }))
+        .sort((a, b) => b.m - a.m)
+        .slice(5);
+      for (const { f } of old) fs.unlinkSync(path.join(snapDir, f));
+    } catch { /* best effort */ }
+
     process.stdout.write(`BroziCode snapshot saved: ${snapPath} (${snap.length}/${HARD_CAP} chars)\n`);
   } catch (err) {
     process.stderr.write(`[brozicode] pre-compact-snapshot: ${err.message}\n`);
