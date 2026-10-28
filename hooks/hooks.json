@@ -20,6 +20,15 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-repo-map.js\""
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-reanchor.js\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -32,17 +41,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/token-budget-guard.js\""
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "^(Read|Grep|Glob)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-blocker.js\""
           }
         ]
       }
@@ -126,10 +124,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-tracker.js\" epoch"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-reanchor.js\""
           },
           {
             "type": "command",

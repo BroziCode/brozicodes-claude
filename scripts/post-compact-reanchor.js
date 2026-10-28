@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// BroziCode PostCompact Re-anchor
-// After context compaction, reminds the agent of its tool constraints
-// and points it to the pre-compaction snapshot for context restoration.
+// BroziCode post-compaction re-anchor — runs as SessionStart (matcher "compact").
+// It used to run on PostCompact, whose stdout Claude Code does NOT add to the
+// context (only SessionStart / UserPromptSubmit stdout is injected), so the
+// model never saw it. SessionStart fires with source "compact" right after.
+// Points the agent at its tools and at the pre-compaction snapshot.
 
 import fs from 'fs';
 import path from 'path';
@@ -20,10 +22,12 @@ process.stdin.on('end', () => {
   // Keep this list truthful. It used to say "NEVER use Read/Grep/Glob/Edit/Write",
   // but only Read/Grep/Glob are actually blocked — and Read is deliberately allowed
   // for images/PDFs/notebooks, which brozi_smart_search cannot open at all.
+  // Native tools are not blocked (their big outputs are compressed by the
+  // PostToolUse hook); the macro-tools are just cheaper.
   let msg  = `\n⚡ BROZICODE RE-ANCHOR (context was compacted)\n`;
-  msg     += `  Tools: brozi_smart_search (read/grep/glob), brozi_batch_edit (writes), brozi_run (shell)\n`;
-  msg     += `  Read/Grep/Glob are blocked — use brozi_smart_search. Prefer brozi_batch_edit over Edit/Write.\n`;
-  msg     += `  Your previously-read files are NOT in context any more; re-read what you still need.\n`;
+  msg     += `  Prefer: brozi_smart_search (read/grep/glob/skeletons), brozi_batch_edit (multi-file writes),\n`;
+  msg     += `  brozi_run (shell), brozi_script (multi-step chains).\n`;
+  msg     += `  Files read before compaction are NOT in context any more; re-read what you still need.\n`;
 
   if (fs.existsSync(snapPath)) {
     msg += `  Context snapshot — run to restore:\n`;

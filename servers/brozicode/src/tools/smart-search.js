@@ -4,6 +4,7 @@ import { promises as fs, readFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import fg from 'fast-glob';
+import { focusRegex, MAX_RESULT_CHARS } from '../lib/compress.js';
 
 // ─── In-process file cache ────────────────────────────────────────────────────
 // Persists across all tool calls within the same Node.js session (shared module state).
@@ -430,6 +431,16 @@ function buildResponse(filePath, result, projectDir) {
   return out.trim();
 }
 
+/** Skeleton as display text, or null when there is no extractor / nothing found.
+ *  Used by the native-Read PostToolUse hook (via hooklib.js). */
+export function renderSkeleton(content, filePath, maxLines = 150) {
+  const sk = trimSkeleton(
+    buildSkeleton(content, filePath, { includeImports: true, includeTypes: true, includePrivate: false }),
+    maxLines,
+  );
+  return sk && sk.sorted.length ? buildResponse(filePath, sk, null) : null;
+}
+
 // ─── Glob / line-range helpers ────────────────────────────────────────────────
 
 /** Parse "src/**\/*.ts#10-40" → { pattern: "src/**\/*.ts", lineStart: 10, lineEnd: 40 } */
@@ -529,6 +540,7 @@ function relativize(absPath, projectDir) {
 async function handler({
   file_glob_patterns,
   content_regex,
+  focus,
   output_mode,
   summary,
   if_modified_since,
@@ -566,6 +578,11 @@ async function handler({
               `Escape regex metacharacters — ( ) [ ] { } * + ? | \\ — or simplify the pattern.`,
       }] };
     }
+  } else if (focus) {
+    // focus = plain keywords → literal, case-insensitive match with a little
+    // context, so the caller gets only the relevant regions of each file.
+    contentRe = focusRegex(focus, 'gi');
+    if (contentRe && !lines_before && !lines_after) { lines_before = 2; lines_after = 2; }
   }
 
   // A content_regex ALWAYS means "show me the matching lines". This used to be
@@ -662,9 +679,9 @@ async function handler({
   // 6. Process files, apply content_regex filter, build output
   const sections     = [];
   const matchCounts  = [];
-  // Claude Code's internal MCP result token limit is well below 400KB;
-  // 150KB keeps individual responses safely under that threshold.
-  const MAX_RESPONSE_BYTES  = 150_000;
+  // Claude Code spills MCP text results over 50K chars to a file the model then
+  // has to read back (another round-trip). Stay under it.
+  const MAX_RESPONSE_BYTES  = MAX_RESULT_CHARS;
   // JS/TS files larger than this get auto-skeletonized in plain-content mode
   // to prevent the chunk-read spiral that occurs when a raw 2500-line file
   // overflows Claude Code's MCP response buffer.
@@ -892,7 +909,7 @@ async function handler({
 
   if (skippedFiles.length > 0) {
     sections.push(
-      `⚠ ${skippedFiles.length} file(s) omitted — response exceeded 150KB limit: ${skippedFiles.join(', ')}\n` +
+      `⚠ ${skippedFiles.length} file(s) omitted — response hit the ${Math.round(MAX_RESPONSE_BYTES / 1000)}K-char cap: ${skippedFiles.join(', ')}\n` +
       `  Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
     );
   }
@@ -907,15 +924,18 @@ async function handler({
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 export function registerSmartSearch(server) {
-  server.tool(
+  return server.tool(
     'brozi_smart_search',
-    'glob+grep+read+AST in one call. Replaces Read/Grep/Glob. Append #N-M to globs for line ranges. Large JS/TS files auto-skeletonized. Repeated full-file reads return compact in-context notice.',
+    'glob+grep+read+AST in one call; cheaper than Read/Grep/Glob. Append #N-M to globs for line ranges. focus:"kw1 kw2" returns only matching regions. Large files auto-skeletonized. Repeated full-file reads return the skeleton only.',
     {
       file_glob_patterns: z.array(z.string()).min(1)
         .describe('Glob patterns to match files. Append #N-M to limit to a line range.'),
 
       content_regex: z.string().optional()
         .describe('Filter: only include files whose content matches this regex.'),
+
+      focus: z.string().optional()
+        .describe('Keywords (space-separated, literal, case-insensitive). Like content_regex with ±2 context lines — show only the relevant regions. Ignored if content_regex is set.'),
 
       output_mode: z.enum(['file_paths_with_content', 'file_paths_only', 'file_paths_with_match_count'])
         .default('file_paths_with_content')

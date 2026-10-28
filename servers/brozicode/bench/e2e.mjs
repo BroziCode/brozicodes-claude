@@ -14,6 +14,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildSkeleton } from '../src/tools/smart-search.js';
+import { digest } from '../src/lib/compress.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(__dirname, '../src/tools');
@@ -66,22 +67,23 @@ function task(name, off, on) {
 }
 
 // ── T4: rename across 3 files (Read→Edit→Verify vs one batch) ─────────────────
-// OFF: per file native flow = Read(full) + Edit echo + re-Read to verify ≈ 2×full.
-// ON: a single batch_edit returns a ~4-line confirmation.
+// OFF: per file native flow = Read(full) + Edit echo. (Earlier versions also
+// charged a re-Read "to verify" — Claude Code doesn't do that, so it inflated
+// the native side.) ON: a single batch_edit returns a ~4-line confirmation.
 {
   const contents = await Promise.all(FILES.map(read));
-  const off = contents.reduce((s, c) => s + 2 * tok(c) + 60, 0); // 60t edit-echo overhead/file
+  const off = contents.reduce((s, c) => s + tok(c) + 60, 0); // 60t edit-echo overhead/file
   const on  = tok('✓ Applied 3 edit(s) across 3 file(s)\n  a.js  1 edit(s)\n  b.js  1 edit(s)\n  c.js  1 edit(s)');
   task('rename across 3 files', off, on);
 }
 
 // ── T5: run a command with large output ──────────────────────────────────────
-// OFF: Bash dumps the whole 500-line output. ON: brozi_run keeps 30 lines + errors + hint.
+// OFF: Bash dumps the whole 500-line output. ON: brozi_run's real digest
+// (errors ±1, head, tail) + the query hint.
 {
   const lines = Array.from({ length: 500 }, (_, i) => i === 240 ? `  Error: thing ${i} failed` : `  log line ${i} doing work here`);
   const full = lines.join('\n');
-  const errs = lines.filter(l => /error/i.test(l));
-  const on = lines.slice(0, 30).join('\n') + '\n  … [470 lines stored]\n' + errs.join('\n') + '\n  query hint';
+  const on = digest(lines).text + '\n  ── more: brozi_run({ command: <same>, query: "regex" })';
   task('run cmd w/ 500-line output', tok(full), tok(on));
 }
 
