@@ -1,13 +1,16 @@
 {
   "name": "brozicode-server",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.js --bundle --platform=node --format=esm --outfile=bundle.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
-    "test": "node test/skeleton.test.mjs && node test/batch-edit.test.mjs",
-    "test:boot": "npm run build && node test/boot.test.mjs",
-    "verify": "npm test && npm run build && node test/boot.test.mjs",
+    "build": "npm run build:server && npm run build:hooks",
+    "build:server": "esbuild src/index.js --bundle --platform=node --format=esm --outfile=bundle.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
+    "build:hooks": "esbuild src/hooklib.js --bundle --platform=node --format=esm --outfile=hooklib.js --banner:js='import { createRequire } from \"module\"; const require = createRequire(import.meta.url);'",
+    "test": "node test/skeleton.test.mjs && node test/batch-edit.test.mjs && node test/compress.test.mjs",
+    "test:boot": "npm run build && node test/boot.test.mjs && node test/hooks.test.mjs",
+    "verify": "npm test && npm run test:boot",
     "bench": "node bench/e2e.mjs",
+    "bench:live": "node bench/live.mjs",
     "dev": "node --watch src/index.js"
   },
   "dependencies": {

@@ -22,7 +22,8 @@ That's it. The agent calls the tools. You just code.
 |---|---|---|
 | `brozi_batch_edit` | Read→Edit→Verify loop | ~5 round-trips per task |
 | `brozi_smart_search` | Full file reads + grep | 2,000 lines → 150 lines |
-| `brozi_run` | Bash with raw output | 800-line logs → 50 lines |
+| `brozi_run` | Bash with raw output | 800-line logs → errors + head + tail |
+| `brozi_script` | Chains of 3+ dependent calls | intermediate data never enters context |
 
 ### brozi_batch_edit
 
@@ -45,7 +46,8 @@ Combined file discovery, grep, and reading in one call. Supports:
 - `#N-M` line-range suffix for targeted reads
 - `if_modified_since` caching — skip unchanged files
 - In-process file cache — zero disk I/O on repeated reads within a session
-- **Stale-read detection** — re-reads of unchanged files return a compact one-line notice instead of full content
+- **`focus`** — plain keywords; returns only matching regions with ±2 lines of context
+- **Stale-read detection** — re-reads of unchanged files return the skeleton only
 - **Auto-skeleton gate** — JS/TS files >300 lines without a line range are auto-skeletonized (prevents token spirals)
 - **TOON output** — `file_paths_only` and `file_paths_with_match_count` use compact `relpath:count` format (~70% smaller)
 - `lines_before` / `lines_after` context around matches
@@ -55,10 +57,20 @@ Combined file discovery, grep, and reading in one call. Supports:
 ### brozi_run
 
 Run a shell command and get compressed, ANSI-stripped output. Supports:
-- Automatic truncation to `max_lines` (default: 50)
-- Error/warning line preservation even when truncating (`keep_errors: true`)
-- ANSI escape code stripping (`strip_ansi: true`)
+- Per-command noise filters: passing tests, install/progress spam, git transfer progress, repeated lines
+- Output over `max_lines` (default: 50) becomes one ordered digest: every error line, every `focus`
+  match, head and tail — the answer is in the first response, not behind a follow-up query
+- Full output stored; `query: "regex"` searches it without re-running
 - Runs in `CLAUDE_PROJECT_DIR`
+
+### brozi_script
+
+Code mode: one async JS snippet chains `read`, `glob`, `sh`, `search`, `edit`, `run` and returns only
+the final value, so intermediate data never touches the context. Not a security sandbox (`node:vm`) —
+it has the same reach as `brozi_run`.
+
+All four tools are marked `anthropic/alwaysLoad`, so Claude Code doesn't defer them behind tool search
+(which cost an extra ToolSearch round-trip on first use).
 
 ## Smart hooks
 
@@ -66,11 +78,15 @@ BroziCode installs Claude Code hooks that activate automatically every session:
 
 | Hook | Trigger | Action |
 |---|---|---|
-| SessionStart | session open | auto-configure `~/.claude/settings.json` on version change; init savings tracking + build repo map (`.brozicode/repo-map.md`) |
-| PreToolUse | `Read\|Grep\|Glob` | **hard block** — outputs targeted `brozi_smart_search` alternative |
-| PostToolUse | `Bash\|Read` | rewrite: strip ANSI, truncate (100/200 lines), preserve errors |
+| SessionStart | session open | auto-configure `~/.claude/settings.json` on version change; init savings tracking; inject a ~1K-token repo map (imported files only) |
+| SessionStart (`compact`) | after compaction | re-anchor agent to its tools + point to snapshot |
+| UserPromptSubmit | each prompt | warn once at 50/70/90% of context budget, from real transcript usage |
+| PostToolUse | `Bash\|Read` | compress native output in place: Bash → noise filter / digest (full output spilled to a temp file); whole-file Read >400 lines → skeleton |
 | PreCompact | compaction | snapshot recent files + git diff → `.brozicode/snapshot-{id}.md` |
-| PostCompact | after compaction | re-anchor agent to tool rules + point to snapshot |
+
+Native Read/Grep/Glob are no longer blocked. Blocking cost 2–3 extra model steps per attempt
+(denied call → error → retry); compressing their output in place keeps the tools the model is
+trained on and still cuts what reaches the context.
 
 ## Session savings display
 
@@ -89,8 +105,8 @@ BroziCode ships two agents. Both run in caveman mode (ultra-compressed responses
 
 ### `brozicode:brozicode`
 
-Main coding agent. Uses `brozi_batch_edit`, `brozi_smart_search`, `brozi_run` exclusively.
-Forbidden from native Read/Edit/Write/Grep/Glob tools.
+Main coding agent. Prefers `brozi_batch_edit`, `brozi_smart_search`, `brozi_run`, `brozi_script`;
+falls back to native tools when they fit better (their large outputs are compressed by hooks).
 
 ### `brozicode:explore`
 
@@ -125,11 +141,10 @@ No manual config needed. Re-runs whenever the plugin version changes.
 **3. Per-project — `CLAUDE.md`**
 ```markdown
 ## File operations
-- NEVER use Read, Edit, Write, Grep, Glob for file work
-- ALWAYS use `brozi_smart_search` to find / read files
-- ALWAYS use `brozi_batch_edit` for all file writes and edits
-- ALWAYS use `brozi_run` instead of Bash for command output
-- Batch as many edits as possible into a single `brozi_batch_edit` call
+- Prefer `brozi_smart_search` to find / read files
+- Prefer `brozi_batch_edit` for file writes, batching edits into one call
+- Prefer `brozi_run` over Bash for command output
+- Use `brozi_script` for chains of 3+ dependent lookups
 ```
 The default agent picks up these rules and behaves like brozicode for that project.
 
@@ -143,9 +158,28 @@ Claude delegates that task to `brozicode:brozicode` without any config change.
 
 ## Version
 
-**v0.8.4**
+**v0.12.0**
+
+### Measuring
+
+- `npm run bench` — deterministic model of context-injection tokens (CI regression guard)
+- `npm run bench:live -- --model sonnet --runs 3` — real `claude -p` sessions, BroziCode off / on /
+  on-without-caveman; reports billed tokens, cost and task pass rate. Costs real money; not in CI.
 
 ### Changelog
+
+**v0.12.0**
+- **Compress, don't block** — removed the PreToolUse hard block on Read/Grep/Glob (2–3 wasted model steps per attempt). Native Bash/Read output is now compressed in place via PostToolUse `updatedToolOutput` (shapes verified against Claude Code 2.1.312)
+- **`alwaysLoad`** — all tools marked `anthropic/alwaysLoad`; no ToolSearch round-trip before first use
+- **`brozi_run` digest** — errors, focus hits, head and tail in the first response (was: first 30 lines); failing commands get the same treatment (was: head only, hiding tail failures)
+- **Per-command noise filters** — test runners, package managers, git transfer progress, build chatter, `\r` progress bars, repeated lines; shared by `brozi_run` and the Bash hook
+- **`focus` param** on `brozi_run` and `brozi_smart_search`
+- **`brozi_script`** — code-mode tool: chain read/glob/sh/search/edit/run in one snippet, return only the result
+- **Repo map** — imported files only (was flooded by unrelated leaf files), hard ~1K-token budget, no timestamp, injected into context instead of printed as a path
+- **Budget guard** — real context size from transcript usage (was a tool-output sum that over-counted, incl. subagents); re-arms after /compact
+- **Re-anchor fix** — moved to SessionStart(`compact`); PostCompact stdout never reached the model
+- **Results capped at 45K chars** — Claude Code spills MCP results over 50K to a file
+- **Honest numbers** — e2e bench no longer charges native edits a phantom re-read; caveman's "~75%" claim removed; new live A/B harness
 
 **v0.8.4**
 - **Update notifications** — on session start, BroziCode checks GitHub for newer versions (at most once per 24h) and prints a one-liner if an update is available: `⚡ Update available: vX.X.X → vY.Y.Y. Run: /plugin update brozicode`

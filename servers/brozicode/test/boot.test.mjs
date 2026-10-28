@@ -15,11 +15,14 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const EXPECTED = ['brozi_batch_edit', 'brozi_smart_search', 'brozi_run'];
+const EXPECTED = ['brozi_batch_edit', 'brozi_smart_search', 'brozi_run', 'brozi_script'];
 
 function handshake(entry) {
   return new Promise(resolve => {
-    const proc = spawn('node', [entry], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn('node', [entry], {
+      cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, // brozi_script resolves paths against it
+    });
     let out = '', err = '';
     proc.stdout.on('data', d => { out += d; });
     proc.stderr.on('data', d => { err += d; });
@@ -31,6 +34,9 @@ function handshake(entry) {
     setTimeout(() => {
       send({ jsonrpc: '2.0', method: 'notifications/initialized' });
       send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+        name: 'brozi_script', arguments: { code: 'return (await glob("package.json")).length' },
+      }});
     }, 250);
 
     setTimeout(() => {
@@ -40,6 +46,7 @@ function handshake(entry) {
       resolve({
         init:  msgs.find(m => m.id === 1)?.result,
         tools: msgs.find(m => m.id === 2)?.result?.tools,
+        call:  msgs.find(m => m.id === 3)?.result,
         err,
       });
     }, 1100);
@@ -54,11 +61,17 @@ async function test(name, fn) {
 
 for (const entry of ['bundle.js', 'src/index.js']) {
   await test(`${entry} completes an MCP handshake and registers all tools`, async () => {
-    const { init, tools, err } = await handshake(entry);
+    const { init, tools, call, err } = await handshake(entry);
     assert.ok(init, `no initialize response. stderr:\n${err.slice(0, 600)}`);
     assert.ok(tools, `no tools/list response. stderr:\n${err.slice(0, 600)}`);
     const names = tools.map(t => t.name).sort();
     assert.deepStrictEqual(names, [...EXPECTED].sort(), `registered: ${names.join(', ')}`);
+    // Without alwaysLoad, Claude Code defers these behind tool search and every
+    // first use costs an extra ToolSearch round-trip.
+    for (const t of tools) {
+      assert.strictEqual(t._meta?.['anthropic/alwaysLoad'], true, `${t.name} is not alwaysLoad`);
+    }
+    assert.strictEqual(call?.content?.[0]?.text, '1', `brozi_script returned ${JSON.stringify(call)}`);
     assert.ok(init.serverInfo?.version && init.serverInfo.version !== '0.0.0',
       `server reported version ${init.serverInfo?.version} — package.json lookup failed`);
   });

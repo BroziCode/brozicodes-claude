@@ -32,19 +32,19 @@ Format as a concise status block matching this shape (hook list is dynamic — d
 
 ```
 brozicode-server v0.7.0
-    tools:    brozi_batch_edit, brozi_smart_search, brozi_run
-    bundle:   .../servers/brozicode/bundle.js
+    tools:    brozi_batch_edit, brozi_smart_search, brozi_run, brozi_script
+    bundle:   .../servers/brozicode/bundle.js (+ hooklib.js for hooks)
     hooks:    SessionStart → session-tracker.js init, session-start-repo-map.js
-              UserPromptSubmit → session-tracker.js track
-              PreToolUse(^(Read|Grep|Glob)$) → pre-tool-blocker.js
-              PostToolUse(^(Bash|Read)$) → post-tool-rewriter.js
+              SessionStart(compact) → post-compact-reanchor.js
+              UserPromptSubmit → session-tracker.js track, token-budget-guard.js
+              PostToolUse(^(Bash|Read)$) → post-tool-rewriter.js (compress)
               PostToolUse(^(Edit|Write|MultiEdit)$) → edit-batching-nudge.js
               PostToolUse(.*) → session-tracker.js track
               SubagentStop → session-tracker.js track
               Stop → session-tracker.js stop
               StopFailure → session-tracker.js init
               PreCompact → pre-compact-snapshot.js, session-tracker.js track
-              PostCompact → post-compact-reanchor.js, session-tracker.js track
+              PostCompact → session-tracker.js epoch, session-tracker.js track
     agent:    brozicode:brozicode (sonnet, maxTurns: 30)
     explore:  brozicode:explore sub-agent
     skills:   batch-edit, smart-search, savings, info, update

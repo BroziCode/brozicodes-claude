@@ -41,12 +41,15 @@ async function run() {
   } catch { /* best effort */ }
 
   // ── 0. Skip if map is fresh (< 30 min) ──────────────────────────────────
+  // SessionStart stdout is injected into the model's context. Inject the map
+  // itself (not just its path — that cost a tool call to use), but not on
+  // resume, where the earlier injection is already in the conversation.
+  const inject = md => { if (event.source !== 'resume' && md) process.stdout.write(md); };
+
   try {
-    const stat  = fs.statSync(mapPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs < 30 * 60 * 1000) {
-      const ageMin = Math.round(ageMs / 60_000);
-      process.stdout.write(`BroziCode repo map cached (${ageMin}m old): ${mapPath}\n`);
+    const stat = fs.statSync(mapPath);
+    if (Date.now() - stat.mtimeMs < 30 * 60 * 1000) {
+      inject(fs.readFileSync(mapPath, 'utf8'));
       process.exit(0);
     }
   } catch { /* map doesn't exist yet — proceed */ }
@@ -136,10 +139,16 @@ async function run() {
   }
 
   // ── 4. Take top 30 by PageRank ───────────────────────────────────────────────
+  // Keep only files something actually imports. Files with no inbound edges
+  // all tie at the baseline rank and used to fill the map by tie-break — run
+  // from a folder holding several projects, 27 of 30 entries were unrelated
+  // leaf pages. Being imported is the signal; drop the rest.
   const top30 = [...rank.entries()]
+    .filter(([fp]) => (reverseAdj.get(fp) || []).length > 0)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 30)
     .map(([fp]) => fp);
+  if (top30.length === 0) { process.exit(0); }
 
   // ── 5. Lightweight skeleton (regex-based, no babel dep) ───────────────────────
   function getSkeletonLines(fp) {
@@ -153,7 +162,7 @@ async function run() {
     // iteration, so the 20-symbol cap below never actually capped anything.
     const srcLines = code.split('\n');
     for (let i = 0; i < srcLines.length; i++) {
-      if (out.length >= 20) break;
+      if (out.length >= 8) break;
       const t = srcLines[i].trim();
       if (t.length === 0 || t.length > 120) continue;
       if (
@@ -175,21 +184,25 @@ async function run() {
   }
 
   // ── 6. Build markdown ────────────────────────────────────────────────────────
-  let md  = `# BroziCode Repo Map\n`;
-  md     += `Generated: ${new Date().toISOString()}\n`;
-  md     += `Top ${top30.length} files by import centrality (PageRank over ${files.length} source files).\n\n`;
-
+  // Hard budget, ~1K tokens. Injected every session, so it must stay small —
+  // and carry no timestamp, so an unchanged repo yields byte-identical text.
+  // ponytail: JS/TS import graph only; other languages get no map.
+  const MAX_CHARS = 4_000;
+  let md  = `# BroziCode repo map — most-imported files (PageRank over ${files.length} JS/TS files)\n\n`;
+  let included = 0;
   for (const fp of top30) {
-    const rel = path.relative(projectDir, fp);
-    const pr  = rank.get(fp).toFixed(4);
-    md += `## ${rel}  (rank ${pr})\n${getSkeletonLines(fp).join('\n')}\n\n`;
+    const section = `## ${path.relative(projectDir, fp)}\n${getSkeletonLines(fp).join('\n')}\n\n`;
+    if (md.length + section.length > MAX_CHARS) break;
+    md += section;
+    included++;
   }
+  if (included < top30.length) md += `(${top30.length - included} more ranked file(s) omitted for budget)\n`;
 
   // ── 7. Write atomically ──────────────────────────────────────────────────────
   const tmp = mapPath + '.tmp';
   fs.writeFileSync(tmp, md, 'utf8');
   fs.renameSync(tmp, mapPath);
 
-  process.stdout.write(`BroziCode repo map ready: ${mapPath} (${top30.length} files)\n`);
+  inject(md);
   process.exit(0);
 }

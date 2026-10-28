@@ -491,7 +491,7 @@ async function handler({ edits, validate, stopOnFirstError }) {
 // ─── Export ──────────────────────────────────────────────────────────────────
 
 export function registerBatchEdit(server) {
-  server.tool(
+  return server.tool(
     'brozi_batch_edit',
     `Apply multiple file edits in one operation with optional local validation.
 Use instead of sequential Read→Edit→Verify calls when editing 2+ files.

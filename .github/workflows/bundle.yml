@@ -34,14 +34,18 @@ jobs:
         run: npm run bench
         working-directory: servers/brozicode
 
-      - name: Build bundle
+      - name: Build bundles
         run: npm run build
+        working-directory: servers/brozicode
+
+      - name: Boot + hook tests (against the built bundles)
+        run: node test/boot.test.mjs && node test/hooks.test.mjs
         working-directory: servers/brozicode
 
       - name: Commit bundle if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add servers/brozicode/bundle.js
+          git add servers/brozicode/bundle.js servers/brozicode/hooklib.js
           git diff --staged --quiet || git commit -m "build: auto-bundle [skip ci]"
           git push

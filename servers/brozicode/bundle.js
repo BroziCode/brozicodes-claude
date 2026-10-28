@@ -3231,8 +3231,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path3) {
-      let input = path3;
+    function removeDotSegments(path4) {
+      let input = path4;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3484,8 +3484,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path3, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
+        const [path4, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6151,11 +6151,11 @@ var require_format = __commonJS({
           }
           function getFormat(fmtDef) {
             const code = fmtDef instanceof RegExp ? (0, codegen_1.regexpCode)(fmtDef) : opts.code.formats ? (0, codegen_1._)`${opts.code.formats}${(0, codegen_1.getProperty)(schema)}` : void 0;
-            const fmt = gen.scopeValue("formats", { key: schema, ref: fmtDef, code });
+            const fmt2 = gen.scopeValue("formats", { key: schema, ref: fmtDef, code });
             if (typeof fmtDef == "object" && !(fmtDef instanceof RegExp)) {
-              return [fmtDef.type || "string", fmtDef.validate, (0, codegen_1._)`${fmt}.validate`];
+              return [fmtDef.type || "string", fmtDef.validate, (0, codegen_1._)`${fmt2}.validate`];
             }
-            return ["string", fmtDef, fmt];
+            return ["string", fmtDef, fmt2];
           }
           function validCondition() {
             if (typeof formatDef == "object" && !(formatDef instanceof RegExp) && formatDef.async) {
@@ -6817,8 +6817,8 @@ var require_limit = __commonJS({
             ref: self.formats,
             code: opts.code.formats
           });
-          const fmt = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
-          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt} != "object"`, (0, codegen_1._)`${fmt} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt}.compare != "function"`, compareCode(fmt)));
+          const fmt2 = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
+          cxt.fail$data((0, codegen_1.or)((0, codegen_1._)`typeof ${fmt2} != "object"`, (0, codegen_1._)`${fmt2} instanceof RegExp`, (0, codegen_1._)`typeof ${fmt2}.compare != "function"`, compareCode(fmt2)));
         }
         function validateFormat() {
           const format = fCxt.schema;
@@ -6828,15 +6828,15 @@ var require_limit = __commonJS({
           if (typeof fmtDef != "object" || fmtDef instanceof RegExp || typeof fmtDef.compare != "function") {
             throw new Error(`"${keyword}": format "${format}" does not define "compare" function`);
           }
-          const fmt = gen.scopeValue("formats", {
+          const fmt2 = gen.scopeValue("formats", {
             key: format,
             ref: fmtDef,
             code: opts.code.formats ? (0, codegen_1._)`${opts.code.formats}${(0, codegen_1.getProperty)(format)}` : void 0
           });
-          cxt.fail$data(compareCode(fmt));
+          cxt.fail$data(compareCode(fmt2));
         }
-        function compareCode(fmt) {
-          return (0, codegen_1._)`${fmt}.compare(${data}, ${schemaCode}) ${KWDs[keyword].fail} 0`;
+        function compareCode(fmt2) {
+          return (0, codegen_1._)`${fmt2}.compare(${data}, ${schemaCode}) ${KWDs[keyword].fail} 0`;
         }
       },
       dependencies: ["format"]
@@ -6878,12 +6878,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs3, exportName) {
+    function addFormats(ajv, list, fs4, exportName) {
       var _a;
       var _b;
       (_a = (_b = ajv.opts.code).formats) !== null && _a !== void 0 ? _a : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs3[f]);
+        ajv.addFormat(f, fs4[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -21538,7 +21538,7 @@ var require_path = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.convertPosixPathToPattern = exports.convertWindowsPathToPattern = exports.convertPathToPattern = exports.escapePosixPath = exports.escapeWindowsPath = exports.escape = exports.removeLeadingDotSegment = exports.makeAbsolute = exports.unixify = void 0;
     var os2 = __require("os");
-    var path3 = __require("path");
+    var path4 = __require("path");
     var IS_WINDOWS_PLATFORM = os2.platform() === "win32";
     var LEADING_DOT_SEGMENT_CHARACTERS_COUNT = 2;
     var POSIX_UNESCAPED_GLOB_SYMBOLS_RE = /(\\?)([()*?[\]{|}]|^!|[!+@](?=\()|\\(?![!()*+?@[\]{|}]))/g;
@@ -21550,7 +21550,7 @@ var require_path = __commonJS({
     }
     exports.unixify = unixify;
     function makeAbsolute(cwd, filepath) {
-      return path3.resolve(cwd, filepath);
+      return path4.resolve(cwd, filepath);
     }
     exports.makeAbsolute = makeAbsolute;
     function removeLeadingDotSegment(entry) {
@@ -22847,7 +22847,7 @@ var require_braces = __commonJS({
 var require_constants2 = __commonJS({
   "node_modules/picomatch/lib/constants.js"(exports, module) {
     "use strict";
-    var path3 = __require("path");
+    var path4 = __require("path");
     var WIN_SLASH = "\\\\/";
     var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
     var DEFAULT_MAX_EXTGLOB_RECURSION = 0;
@@ -23021,7 +23021,7 @@ var require_constants2 = __commonJS({
       /* | */
       CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279,
       /* \uFEFF */
-      SEP: path3.sep,
+      SEP: path4.sep,
       /**
        * Create EXTGLOB_CHARS
        */
@@ -23048,7 +23048,7 @@ var require_constants2 = __commonJS({
 var require_utils3 = __commonJS({
   "node_modules/picomatch/lib/utils.js"(exports) {
     "use strict";
-    var path3 = __require("path");
+    var path4 = __require("path");
     var win32 = process.platform === "win32";
     var {
       REGEX_BACKSLASH,
@@ -23077,7 +23077,7 @@ var require_utils3 = __commonJS({
       if (options && typeof options.windows === "boolean") {
         return options.windows;
       }
-      return win32 === true || path3.sep === "\\";
+      return win32 === true || path4.sep === "\\";
     };
     exports.escapeLast = (input, char, lastIdx) => {
       const idx = input.lastIndexOf(char, lastIdx);
@@ -24441,7 +24441,7 @@ var require_parse2 = __commonJS({
 var require_picomatch = __commonJS({
   "node_modules/picomatch/lib/picomatch.js"(exports, module) {
     "use strict";
-    var path3 = __require("path");
+    var path4 = __require("path");
     var scan = require_scan();
     var parse4 = require_parse2();
     var utils = require_utils3();
@@ -24526,7 +24526,7 @@ var require_picomatch = __commonJS({
     };
     picomatch.matchBase = (input, glob, options, posix = utils.isWindows(options)) => {
       const regex = glob instanceof RegExp ? glob : picomatch.makeRe(glob, options);
-      return regex.test(path3.basename(input));
+      return regex.test(path4.basename(input));
     };
     picomatch.isMatch = (str, patterns, options) => picomatch(patterns, options)(str);
     picomatch.parse = (pattern, options) => {
@@ -24753,7 +24753,7 @@ var require_pattern2 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isAbsolute = exports.partitionAbsoluteAndRelative = exports.removeDuplicateSlashes = exports.matchAny = exports.convertPatternsToRe = exports.makeRe = exports.getPatternParts = exports.expandBraceExpansion = exports.expandPatternsWithBraceExpansion = exports.isAffectDepthOfReadingPattern = exports.endsWithSlashGlobStar = exports.hasGlobStar = exports.getBaseDirectory = exports.isPatternRelatedToParentDirectory = exports.getPatternsOutsideCurrentDirectory = exports.getPatternsInsideCurrentDirectory = exports.getPositivePatterns = exports.getNegativePatterns = exports.isPositivePattern = exports.isNegativePattern = exports.convertToNegativePattern = exports.convertToPositivePattern = exports.isDynamicPattern = exports.isStaticPattern = void 0;
-    var path3 = __require("path");
+    var path4 = __require("path");
     var globParent = require_glob_parent();
     var micromatch = require_micromatch();
     var GLOBSTAR = "**";
@@ -24848,7 +24848,7 @@ var require_pattern2 = __commonJS({
     }
     exports.endsWithSlashGlobStar = endsWithSlashGlobStar;
     function isAffectDepthOfReadingPattern(pattern) {
-      const basename = path3.basename(pattern);
+      const basename = path4.basename(pattern);
       return endsWithSlashGlobStar(pattern) || isStaticPattern(basename);
     }
     exports.isAffectDepthOfReadingPattern = isAffectDepthOfReadingPattern;
@@ -24906,7 +24906,7 @@ var require_pattern2 = __commonJS({
     }
     exports.partitionAbsoluteAndRelative = partitionAbsoluteAndRelative;
     function isAbsolute(pattern) {
-      return path3.isAbsolute(pattern);
+      return path4.isAbsolute(pattern);
     }
     exports.isAbsolute = isAbsolute;
   }
@@ -25081,10 +25081,10 @@ var require_utils4 = __commonJS({
     exports.array = array2;
     var errno = require_errno();
     exports.errno = errno;
-    var fs3 = require_fs();
-    exports.fs = fs3;
-    var path3 = require_path();
-    exports.path = path3;
+    var fs4 = require_fs();
+    exports.fs = fs4;
+    var path4 = require_path();
+    exports.path = path4;
     var pattern = require_pattern2();
     exports.pattern = pattern;
     var stream = require_stream();
@@ -25196,8 +25196,8 @@ var require_async = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.read = void 0;
-    function read(path3, settings, callback) {
-      settings.fs.lstat(path3, (lstatError, lstat) => {
+    function read(path4, settings, callback) {
+      settings.fs.lstat(path4, (lstatError, lstat) => {
         if (lstatError !== null) {
           callFailureCallback(callback, lstatError);
           return;
@@ -25206,7 +25206,7 @@ var require_async = __commonJS({
           callSuccessCallback(callback, lstat);
           return;
         }
-        settings.fs.stat(path3, (statError, stat) => {
+        settings.fs.stat(path4, (statError, stat) => {
           if (statError !== null) {
             if (settings.throwErrorOnBrokenSymbolicLink) {
               callFailureCallback(callback, statError);
@@ -25238,13 +25238,13 @@ var require_sync = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.read = void 0;
-    function read(path3, settings) {
-      const lstat = settings.fs.lstatSync(path3);
+    function read(path4, settings) {
+      const lstat = settings.fs.lstatSync(path4);
       if (!lstat.isSymbolicLink() || !settings.followSymbolicLink) {
         return lstat;
       }
       try {
-        const stat = settings.fs.statSync(path3);
+        const stat = settings.fs.statSync(path4);
         if (settings.markSymbolicLink) {
           stat.isSymbolicLink = () => true;
         }
@@ -25266,12 +25266,12 @@ var require_fs2 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.createFileSystemAdapter = exports.FILE_SYSTEM_ADAPTER = void 0;
-    var fs3 = __require("fs");
+    var fs4 = __require("fs");
     exports.FILE_SYSTEM_ADAPTER = {
-      lstat: fs3.lstat,
-      stat: fs3.stat,
-      lstatSync: fs3.lstatSync,
-      statSync: fs3.statSync
+      lstat: fs4.lstat,
+      stat: fs4.stat,
+      lstatSync: fs4.lstatSync,
+      statSync: fs4.statSync
     };
     function createFileSystemAdapter(fsMethods) {
       if (fsMethods === void 0) {
@@ -25288,12 +25288,12 @@ var require_settings = __commonJS({
   "node_modules/@nodelib/fs.stat/out/settings.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var fs3 = require_fs2();
+    var fs4 = require_fs2();
     var Settings = class {
       constructor(_options = {}) {
         this._options = _options;
         this.followSymbolicLink = this._getValue(this._options.followSymbolicLink, true);
-        this.fs = fs3.createFileSystemAdapter(this._options.fs);
+        this.fs = fs4.createFileSystemAdapter(this._options.fs);
         this.markSymbolicLink = this._getValue(this._options.markSymbolicLink, false);
         this.throwErrorOnBrokenSymbolicLink = this._getValue(this._options.throwErrorOnBrokenSymbolicLink, true);
       }
@@ -25315,17 +25315,17 @@ var require_out = __commonJS({
     var sync = require_sync();
     var settings_1 = require_settings();
     exports.Settings = settings_1.default;
-    function stat(path3, optionsOrSettingsOrCallback, callback) {
+    function stat(path4, optionsOrSettingsOrCallback, callback) {
       if (typeof optionsOrSettingsOrCallback === "function") {
-        async.read(path3, getSettings(), optionsOrSettingsOrCallback);
+        async.read(path4, getSettings(), optionsOrSettingsOrCallback);
         return;
       }
-      async.read(path3, getSettings(optionsOrSettingsOrCallback), callback);
+      async.read(path4, getSettings(optionsOrSettingsOrCallback), callback);
     }
     exports.stat = stat;
-    function statSync(path3, optionsOrSettings) {
+    function statSync(path4, optionsOrSettings) {
       const settings = getSettings(optionsOrSettings);
-      return sync.read(path3, settings);
+      return sync.read(path4, settings);
     }
     exports.statSync = statSync;
     function getSettings(settingsOrOptions = {}) {
@@ -25448,8 +25448,8 @@ var require_utils5 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.fs = void 0;
-    var fs3 = require_fs3();
-    exports.fs = fs3;
+    var fs4 = require_fs3();
+    exports.fs = fs4;
   }
 });
 
@@ -25541,16 +25541,16 @@ var require_async2 = __commonJS({
           return;
         }
         const tasks = names.map((name) => {
-          const path3 = common.joinPathSegments(directory, name, settings.pathSegmentSeparator);
+          const path4 = common.joinPathSegments(directory, name, settings.pathSegmentSeparator);
           return (done) => {
-            fsStat.stat(path3, settings.fsStatSettings, (error2, stats) => {
+            fsStat.stat(path4, settings.fsStatSettings, (error2, stats) => {
               if (error2 !== null) {
                 done(error2);
                 return;
               }
               const entry = {
                 name,
-                path: path3,
+                path: path4,
                 dirent: utils.fs.createDirentFromStats(name, stats)
               };
               if (settings.stats) {
@@ -25644,14 +25644,14 @@ var require_fs4 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.createFileSystemAdapter = exports.FILE_SYSTEM_ADAPTER = void 0;
-    var fs3 = __require("fs");
+    var fs4 = __require("fs");
     exports.FILE_SYSTEM_ADAPTER = {
-      lstat: fs3.lstat,
-      stat: fs3.stat,
-      lstatSync: fs3.lstatSync,
-      statSync: fs3.statSync,
-      readdir: fs3.readdir,
-      readdirSync: fs3.readdirSync
+      lstat: fs4.lstat,
+      stat: fs4.stat,
+      lstatSync: fs4.lstatSync,
+      statSync: fs4.statSync,
+      readdir: fs4.readdir,
+      readdirSync: fs4.readdirSync
     };
     function createFileSystemAdapter(fsMethods) {
       if (fsMethods === void 0) {
@@ -25668,15 +25668,15 @@ var require_settings2 = __commonJS({
   "node_modules/@nodelib/fs.scandir/out/settings.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var path3 = __require("path");
+    var path4 = __require("path");
     var fsStat = require_out();
-    var fs3 = require_fs4();
+    var fs4 = require_fs4();
     var Settings = class {
       constructor(_options = {}) {
         this._options = _options;
         this.followSymbolicLinks = this._getValue(this._options.followSymbolicLinks, false);
-        this.fs = fs3.createFileSystemAdapter(this._options.fs);
-        this.pathSegmentSeparator = this._getValue(this._options.pathSegmentSeparator, path3.sep);
+        this.fs = fs4.createFileSystemAdapter(this._options.fs);
+        this.pathSegmentSeparator = this._getValue(this._options.pathSegmentSeparator, path4.sep);
         this.stats = this._getValue(this._options.stats, false);
         this.throwErrorOnBrokenSymbolicLink = this._getValue(this._options.throwErrorOnBrokenSymbolicLink, true);
         this.fsStatSettings = new fsStat.Settings({
@@ -25703,17 +25703,17 @@ var require_out2 = __commonJS({
     var sync = require_sync2();
     var settings_1 = require_settings2();
     exports.Settings = settings_1.default;
-    function scandir(path3, optionsOrSettingsOrCallback, callback) {
+    function scandir(path4, optionsOrSettingsOrCallback, callback) {
       if (typeof optionsOrSettingsOrCallback === "function") {
-        async.read(path3, getSettings(), optionsOrSettingsOrCallback);
+        async.read(path4, getSettings(), optionsOrSettingsOrCallback);
         return;
       }
-      async.read(path3, getSettings(optionsOrSettingsOrCallback), callback);
+      async.read(path4, getSettings(optionsOrSettingsOrCallback), callback);
     }
     exports.scandir = scandir;
-    function scandirSync(path3, optionsOrSettings) {
+    function scandirSync(path4, optionsOrSettings) {
       const settings = getSettings(optionsOrSettings);
-      return sync.read(path3, settings);
+      return sync.read(path4, settings);
     }
     exports.scandirSync = scandirSync;
     function getSettings(settingsOrOptions = {}) {
@@ -26360,7 +26360,7 @@ var require_settings3 = __commonJS({
   "node_modules/@nodelib/fs.walk/out/settings.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var path3 = __require("path");
+    var path4 = __require("path");
     var fsScandir = require_out2();
     var Settings = class {
       constructor(_options = {}) {
@@ -26370,7 +26370,7 @@ var require_settings3 = __commonJS({
         this.deepFilter = this._getValue(this._options.deepFilter, null);
         this.entryFilter = this._getValue(this._options.entryFilter, null);
         this.errorFilter = this._getValue(this._options.errorFilter, null);
-        this.pathSegmentSeparator = this._getValue(this._options.pathSegmentSeparator, path3.sep);
+        this.pathSegmentSeparator = this._getValue(this._options.pathSegmentSeparator, path4.sep);
         this.fsScandirSettings = new fsScandir.Settings({
           followSymbolicLinks: this._options.followSymbolicLinks,
           fs: this._options.fs,
@@ -26432,7 +26432,7 @@ var require_reader2 = __commonJS({
   "node_modules/fast-glob/out/readers/reader.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var path3 = __require("path");
+    var path4 = __require("path");
     var fsStat = require_out();
     var utils = require_utils4();
     var Reader = class {
@@ -26445,7 +26445,7 @@ var require_reader2 = __commonJS({
         });
       }
       _getFullEntryPath(filepath) {
-        return path3.resolve(this._settings.cwd, filepath);
+        return path4.resolve(this._settings.cwd, filepath);
       }
       _makeEntry(stats, pattern) {
         const entry = {
@@ -26861,7 +26861,7 @@ var require_provider = __commonJS({
   "node_modules/fast-glob/out/providers/provider.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var path3 = __require("path");
+    var path4 = __require("path");
     var deep_1 = require_deep();
     var entry_1 = require_entry();
     var error_1 = require_error();
@@ -26875,7 +26875,7 @@ var require_provider = __commonJS({
         this.entryTransformer = new entry_2.default(this._settings);
       }
       _getRootDirectory(task) {
-        return path3.resolve(this._settings.cwd, task.base);
+        return path4.resolve(this._settings.cwd, task.base);
       }
       _getReaderOptions(task) {
         const basePath = task.base === "." ? "" : task.base;
@@ -27056,16 +27056,16 @@ var require_settings4 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DEFAULT_FILE_SYSTEM_ADAPTER = void 0;
-    var fs3 = __require("fs");
+    var fs4 = __require("fs");
     var os2 = __require("os");
     var CPU_COUNT = Math.max(os2.cpus().length, 1);
     exports.DEFAULT_FILE_SYSTEM_ADAPTER = {
-      lstat: fs3.lstat,
-      lstatSync: fs3.lstatSync,
-      stat: fs3.stat,
-      statSync: fs3.statSync,
-      readdir: fs3.readdir,
-      readdirSync: fs3.readdirSync
+      lstat: fs4.lstat,
+      lstatSync: fs4.lstatSync,
+      stat: fs4.stat,
+      statSync: fs4.statSync,
+      readdir: fs4.readdir,
+      readdirSync: fs4.readdirSync
     };
     var Settings = class {
       constructor(_options = {}) {
@@ -27692,8 +27692,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path3, errorMaps, issueData } = params;
-  const fullPath = [...path3, ...issueData.path || []];
+  const { data, path: path4, errorMaps, issueData } = params;
+  const fullPath = [...path4, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -27809,11 +27809,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path3, key) {
+  constructor(parent, value, path4, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path3;
+    this._path = path4;
     this._key = key;
   }
   get path() {
@@ -31451,10 +31451,10 @@ function assignProp(target, prop, value) {
     configurable: true
   });
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -31774,11 +31774,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a;
     (_a = iss).path ?? (_a.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -41853,7 +41853,7 @@ Created new file(s):
   };
 }
 function registerBatchEdit(server2) {
-  server2.tool(
+  return server2.tool(
     "brozi_batch_edit",
     `Apply multiple file edits in one operation with optional local validation.
 Use instead of sequential Read\u2192Edit\u2192Verify calls when editing 2+ files.
@@ -41879,6 +41879,99 @@ var import_fast_glob = __toESM(require_out4(), 1);
 import { promises as fs2, readFileSync } from "fs";
 import os from "os";
 import path2 from "path";
+
+// src/lib/compress.js
+var ANSI_RE = /[\x1B\x9B](?:\[[0-?]*[ -\/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])/g;
+var stripAnsi = (s) => s.replace(ANSI_RE, "");
+var ERROR_RE = /error\s*TS\d+|^\s*(Error|TypeError|SyntaxError|ReferenceError|Warning):|FAIL\s|✗|✕|\bfailed\b|\bERROR\b|npm ERR!|Traceback \(most recent|panicked at/i;
+var isErrorLine = (l) => ERROR_RE.test(l);
+var NOISE = [
+  {
+    // package managers
+    cmd: /\b(npm|pnpm|yarn|bun)\s+(i|install|add|ci|update)\b|\bpip3?\s+install\b/,
+    drop: /^npm (WARN|notice)|\bdeprecated\b|^(Collecting|Downloading|Using cached|Requirement already satisfied|Installing collected)|^Progress:|^Packages:|^\s*[+]{3,}\s*$/
+  },
+  {
+    // test runners: passing lines (failures + summaries are what matter)
+    cmd: /\b(test|jest|vitest|mocha|pytest|go test|cargo test|node --test)\b/,
+    drop: /^\s*(✓|✔|√|PASS\b|ok \d+ |--- PASS|=== RUN)|\bPASSED\b|^test .* \.\.\. ok$/
+  },
+  {
+    // git network progress
+    cmd: /\bgit\s+(push|pull|fetch|clone)\b/,
+    drop: /^(remote: )?(Enumerating|Counting|Compressing|Writing|Receiving|Resolving|Total|Delta compression)\b/
+  },
+  {
+    // build download/compile chatter
+    cmd: /\b(docker\s+build|cargo\s+build|gradle|mvn)\b/,
+    drop: /^\s*(Compiling |Downloaded |Downloading |\[INFO\] Download)/
+  }
+];
+function filterOutput(command, text) {
+  const drops = NOISE.filter((n) => n.cmd.test(command || "")).map((n) => n.drop);
+  const out = [];
+  let prev = null, rep = 0;
+  const flush = () => {
+    if (rep > 1 && prev.trim()) out[out.length - 1] += `  (\xD7${rep})`;
+  };
+  for (let l of text.split("\n")) {
+    const cr = l.replace(/\r$/, "").lastIndexOf("\r");
+    if (cr >= 0) l = l.slice(cr + 1);
+    l = l.replace(/\r$/, "");
+    if (drops.length && drops.some((d) => d.test(l)) && !isErrorLine(l)) continue;
+    if (l === prev) {
+      rep++;
+      continue;
+    }
+    flush();
+    prev = l;
+    rep = 1;
+    out.push(l);
+  }
+  flush();
+  return out;
+}
+function focusRegex(focus, flags = "i") {
+  const words = String(focus || "").split(/[\s,|]+/).filter((w) => w.length > 1).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return words.length ? new RegExp(words.join("|"), flags) : null;
+}
+function digest(lines, { focus, errors = true, head = 8, tail = 25 } = {}) {
+  const n = lines.length, keep = /* @__PURE__ */ new Set();
+  const add = (i, ctx) => {
+    for (let j = Math.max(0, i - ctx); j <= Math.min(n - 1, i + ctx); j++) keep.add(j);
+  };
+  for (let i = 0; i < Math.min(head, n); i++) keep.add(i);
+  for (let i = Math.max(0, n - tail); i < n; i++) keep.add(i);
+  let errs = 0, hits = 0;
+  if (errors) {
+    for (let i = 0; i < n && errs < 25; i++) if (isErrorLine(lines[i])) {
+      add(i, 1);
+      errs++;
+    }
+  }
+  const fre = focusRegex(focus);
+  if (fre) {
+    for (let i = 0; i < n && hits < 20; i++) if (fre.test(lines[i])) {
+      add(i, 2);
+      hits++;
+    }
+  }
+  const idx = [...keep].sort((a, b) => a - b);
+  const w = String(n).length, out = [];
+  let last = -1;
+  for (const i of idx) {
+    if (i > last + 1) out.push(`  \u2026 [${i - last - 1} lines]`);
+    const l = lines[i];
+    out.push(`${String(i + 1).padStart(w)}: ${l.length > 400 ? l.slice(0, 400) + "\u2026" : l}`);
+    last = i;
+  }
+  return { text: out.join("\n"), shown: idx.length, errors: errs, focusHits: hits };
+}
+var MAX_RESULT_CHARS = 45e3;
+var capChars = (s) => s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + `
+  \u2026 [truncated at ${MAX_RESULT_CHARS} chars]` : s;
+
+// src/tools/smart-search.js
 var fileCache = /* @__PURE__ */ new Map();
 var CACHE_MAX_ENTRIES = 300;
 var CACHE_MAX_BYTES = 64 * 1024 * 1024;
@@ -42321,6 +42414,7 @@ function relativize(absPath, projectDir) {
 async function handler2({
   file_glob_patterns,
   content_regex,
+  focus,
   output_mode,
   summary,
   if_modified_since,
@@ -42354,6 +42448,12 @@ async function handler2({
         text: `Invalid content_regex: ${err.message}
 Escape regex metacharacters \u2014 ( ) [ ] { } * + ? | \\ \u2014 or simplify the pattern.`
       }] };
+    }
+  } else if (focus) {
+    contentRe = focusRegex(focus, "gi");
+    if (contentRe && !lines_before && !lines_after) {
+      lines_before = 2;
+      lines_after = 2;
     }
   }
   const useContext = !!contentRe && !summary;
@@ -42421,7 +42521,7 @@ Escape regex metacharacters \u2014 ( ) [ ] { } * + ? | \\ \u2014 or simplify the
   readResults = readResults.sort((a, b) => a.fp < b.fp ? -1 : 1);
   const sections = [];
   const matchCounts = [];
-  const MAX_RESPONSE_BYTES = 15e4;
+  const MAX_RESPONSE_BYTES = MAX_RESULT_CHARS;
   const MAX_FILE_LINES_RAW = 300;
   let responseSize = 0;
   const skippedFiles = [];
@@ -42594,7 +42694,7 @@ ${buildResponse2(fp, skeleton, projectDir)}`;
   }
   if (skippedFiles.length > 0) {
     sections.push(
-      `\u26A0 ${skippedFiles.length} file(s) omitted \u2014 response exceeded 150KB limit: ${skippedFiles.join(", ")}
+      `\u26A0 ${skippedFiles.length} file(s) omitted \u2014 response hit the ${Math.round(MAX_RESPONSE_BYTES / 1e3)}K-char cap: ${skippedFiles.join(", ")}
   Use file_limit, tighter glob patterns, or #N-M line ranges to narrow the query.`
     );
   }
@@ -42604,12 +42704,13 @@ ${buildResponse2(fp, skeleton, projectDir)}`;
   return { content: [{ type: "text", text: sections.join("\n\n") }] };
 }
 function registerSmartSearch(server2) {
-  server2.tool(
+  return server2.tool(
     "brozi_smart_search",
-    "glob+grep+read+AST in one call. Replaces Read/Grep/Glob. Append #N-M to globs for line ranges. Large JS/TS files auto-skeletonized. Repeated full-file reads return compact in-context notice.",
+    'glob+grep+read+AST in one call; cheaper than Read/Grep/Glob. Append #N-M to globs for line ranges. focus:"kw1 kw2" returns only matching regions. Large files auto-skeletonized. Repeated full-file reads return the skeleton only.',
     {
       file_glob_patterns: external_exports.array(external_exports.string()).min(1).describe("Glob patterns to match files. Append #N-M to limit to a line range."),
       content_regex: external_exports.string().optional().describe("Filter: only include files whose content matches this regex."),
+      focus: external_exports.string().optional().describe("Keywords (space-separated, literal, case-insensitive). Like content_regex with \xB12 context lines \u2014 show only the relevant regions. Ignored if content_regex is set."),
       output_mode: external_exports.enum(["file_paths_with_content", "file_paths_only", "file_paths_with_match_count"]).default("file_paths_with_content").describe("Controls output verbosity."),
       summary: external_exports.boolean().default(false).describe("For JS/TS files: return AST skeleton (signatures, exports) instead of raw source."),
       if_modified_since: external_exports.string().optional().describe("ISO 8601 timestamp. Skip files not modified after this date."),
@@ -42635,17 +42736,8 @@ function registerSmartSearch(server2) {
 import { exec as exec2 } from "child_process";
 import { promisify as promisify2 } from "util";
 var execAsync2 = promisify2(exec2);
-var ANSI_RE = /[\x1B\x9B](?:\[[0-?]*[ -\/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])/g;
-function stripAnsi(str) {
-  return str.replace(ANSI_RE, "");
-}
-var ERROR_RE = /error\s*TS\d+|^\s*(Error|TypeError|SyntaxError|ReferenceError|Warning):|FAIL\s|✗|✕|\bfailed\b|\bERROR\b/i;
-function isErrorLine(line) {
-  return ERROR_RE.test(line);
-}
 var outputStore = /* @__PURE__ */ new Map();
 var OUTPUT_STORE_MAX = 50;
-var STORE_THRESHOLD = 100;
 var STORE_MAX_LINES = 5e4;
 var STORE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 var storeBytes = 0;
@@ -42680,23 +42772,8 @@ function storeOutput(key, command, lines) {
     outputStore.delete(oldest);
   }
 }
-function compressOutput(text, maxLines, keepErrors) {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) return text;
-  const head = lines.slice(0, maxLines);
-  const tail = lines.slice(maxLines);
-  let result = head.join("\n");
-  result += `
-  \u2026 [${tail.length} line${tail.length !== 1 ? "s" : ""} omitted]`;
-  if (keepErrors) {
-    const errs = tail.filter(isErrorLine);
-    if (errs.length > 0) {
-      result += "\n  \u2026 [errors from omitted section:]\n" + errs.join("\n");
-    }
-  }
-  return result;
-}
-async function handler3({ command, keep_errors, max_lines, strip_ansi, query, timeout_ms }) {
+var textResult = (text) => ({ content: [{ type: "text", text: capChars(text) }] });
+async function handler3({ command, focus, keep_errors, max_lines, strip_ansi, query, timeout_ms }) {
   const startMs = Date.now();
   const key = cmdKey(command);
   if (query !== void 0 && query !== "") {
@@ -42716,8 +42793,8 @@ Run brozi_run({ command: "..." }) first to capture output, then query it.`
     } catch {
       return { content: [{ type: "text", text: `Invalid regex: ${query}` }] };
     }
-    const { lines } = stored;
-    const matchIdxs = lines.reduce((acc, line, i) => {
+    const { lines: lines2 } = stored;
+    const matchIdxs = lines2.reduce((acc, line, i) => {
       re.lastIndex = 0;
       if (re.test(line)) acc.push(i);
       return acc;
@@ -42726,30 +42803,28 @@ Run brozi_run({ command: "..." }) first to capture output, then query it.`
       return {
         content: [{
           type: "text",
-          text: `No matches for "${query}" in stored output (${lines.length} lines from: ${command}).`
+          text: `No matches for "${query}" in stored output (${lines2.length} lines from: ${command}).`
         }]
       };
     }
     const shown = /* @__PURE__ */ new Set();
     const out = [];
     for (const i of matchIdxs) {
-      for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++) {
+      for (let j = Math.max(0, i - 2); j <= Math.min(lines2.length - 1, i + 2); j++) {
         if (!shown.has(j)) {
           shown.add(j);
-          out.push(`${String(j + 1).padStart(4)}: ${lines[j]}`);
+          out.push(`${String(j + 1).padStart(4)}: ${lines2[j]}`);
         }
       }
       out.push("  \u2500\u2500\u2500");
     }
     if (out[out.length - 1] === "  \u2500\u2500\u2500") out.pop();
-    return {
-      content: [{
-        type: "text",
-        text: `$ ${command}  [stored, ${matchIdxs.length} match${matchIdxs.length !== 1 ? "es" : ""} for "${query}"]
+    return textResult(
+      `$ ${command}  [stored, ${matchIdxs.length} match${matchIdxs.length !== 1 ? "es" : ""} for "${query}"]
 ` + out.join("\n")
-      }]
-    };
+    );
   }
+  let raw, status = "";
   try {
     const { stdout, stderr } = await execAsync2(command, {
       cwd: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
@@ -42759,82 +42834,117 @@ Run brozi_run({ command: "..." }) first to capture output, then query it.`
       // looked like a failure — which taught the caller to prefer native Bash.
       timeout: timeout_ms
     });
-    let combined = "";
-    if (stdout) combined += stdout;
-    if (stderr) combined += (combined ? "\n" : "") + stderr;
-    if (strip_ansi) combined = stripAnsi(combined);
-    const allLines = combined.trimEnd().split("\n");
-    const elapsed = Date.now() - startMs;
-    if (allLines.length > STORE_THRESHOLD) {
-      storeOutput(key, command, allLines);
-      const errorLines = allLines.filter(isErrorLine).slice(0, 20);
-      let summary = `$ ${command}  [${elapsed}ms \u2014 ${allLines.length} lines intercepted, not in context]
-`;
-      summary += allLines.slice(0, 30).join("\n");
-      if (allLines.length > 30) {
-        summary += `
-  \u2026 [${allLines.length - 30} lines stored \u2014 query with brozi_run({ command, query: "pattern" })]`;
-      }
-      if (errorLines.length > 0) {
-        summary += `
-
-  \u2500\u2500 Errors/warnings (${errorLines.length}) \u2500\u2500
-` + errorLines.join("\n");
-      }
-      summary += `
-
-  \u2500\u2500 Query stored output \u2500\u2500`;
-      summary += `
-  brozi_run({ command: "${command.slice(0, 60)}", query: "your pattern" })`;
-      return { content: [{ type: "text", text: summary }] };
-    }
-    const text = compressOutput(combined.trimEnd(), max_lines, keep_errors);
-    return {
-      content: [{ type: "text", text: `$ ${command}  [${elapsed}ms]
-${text || "(no output)"}` }]
-    };
+    raw = (stdout || "") + (stdout && stderr ? "\n" : "") + (stderr || "");
   } catch (err) {
-    let out = (err.stdout || "") + (err.stdout && err.stderr ? "\n" : "") + (err.stderr || err.message || String(err));
-    if (strip_ansi) out = stripAnsi(out);
-    const allLines = out.trimEnd().split("\n");
-    if (allLines.length > STORE_THRESHOLD) storeOutput(key, command, allLines);
-    const text = compressOutput(out.trimEnd(), max_lines, keep_errors);
-    const elapsed = Date.now() - startMs;
-    const status = err.killed || err.signal ? `timed out after ${timeout_ms}ms (killed${err.signal ? ` \u2014 ${err.signal}` : ""}) \u2014 raise timeout_ms if the command legitimately runs longer` : `exit ${err.code ?? 1}`;
-    return {
-      content: [{ type: "text", text: `$ ${command}  [${elapsed}ms, ${status}]
-${text || "(no output)"}` }]
-    };
+    raw = (err.stdout || "") + (err.stdout && err.stderr ? "\n" : "") + (err.stderr || err.message || String(err));
+    status = err.killed || err.signal ? `timed out after ${timeout_ms}ms (killed${err.signal ? ` \u2014 ${err.signal}` : ""}) \u2014 raise timeout_ms if the command legitimately runs longer` : `exit ${err.code ?? 1}`;
   }
+  if (strip_ansi) raw = stripAnsi(raw);
+  const elapsed = Date.now() - startMs;
+  const tag = status ? `${elapsed}ms, ${status}` : `${elapsed}ms`;
+  const lines = filterOutput(command, raw.trimEnd());
+  if (lines.length <= max_lines) {
+    return textResult(`$ ${command}  [${tag}]
+${lines.join("\n") || "(no output)"}`);
+  }
+  storeOutput(key, command, lines);
+  const d = digest(lines, { focus, errors: keep_errors });
+  return textResult(
+    `$ ${command}  [${tag} \u2014 ${lines.length} lines; showing ${d.errors} error(s)${focus ? `, ${d.focusHits} focus hit(s)` : ""}, head + tail; rest stored]
+${d.text}
+  \u2500\u2500 more: brozi_run({ command: <same>, query: "regex" })`
+  );
 }
 function registerRun(server2) {
-  server2.tool(
+  return server2.tool(
     "brozi_run",
-    `Run a shell command. Outputs >100 lines are intercepted into a process-level store
-(never injected into context). Returns first 30 lines + all error lines + a query hint.
-Query the stored output with the query param to fetch only relevant sections.
-
-Params:
-  command      \u2013 shell command (runs in CLAUDE_PROJECT_DIR)
-  query        \u2013 regex to search stored output for this command (run without query first)
-  keep_errors  \u2013 preserve error/warning lines when truncating small outputs (default: true)
-  max_lines    \u2013 max lines to return for small outputs <100 lines (default: 50)
-  strip_ansi   \u2013 remove ANSI escape codes (default: true)
-  timeout_ms   \u2013 kill after N ms (default 120000, max 600000) \u2014 raise for long builds
-
-Two-step pattern for large outputs:
-  1. brozi_run({ command: "npm test" })                     \u2190 captures, returns summary
-  2. brozi_run({ command: "npm test", query: "FAIL|Error" }) \u2190 searches captured output`,
+    `Run a shell command (cwd = project root). Output is ANSI-stripped and noise-filtered per command
+(passing tests, install/progress spam, repeated lines). Up to max_lines it is returned whole; beyond
+that you get every error line, every focus match, head and tail in one ordered view, and the full
+output is stored \u2014 fetch more with brozi_run({ command: <same>, query: "regex" }) (does not re-run).
+Pass focus: "keywords" to guarantee the lines you care about are shown.`,
     {
       command: external_exports.string().describe("Shell command to execute."),
+      focus: external_exports.string().optional().describe("Keywords (space-separated) whose lines must be shown when output is digested."),
       query: external_exports.string().optional().describe("Regex to search stored output for this command. Run without query first to capture."),
-      keep_errors: external_exports.boolean().default(true).describe("Keep error/warning lines when truncating small outputs."),
-      max_lines: external_exports.number().int().min(1).default(50).describe("Max output lines for outputs under threshold."),
+      keep_errors: external_exports.boolean().default(true).describe("Show error/warning lines when output is digested."),
+      max_lines: external_exports.number().int().min(1).default(50).describe("Return output whole up to this many lines; digest beyond it."),
       strip_ansi: external_exports.boolean().default(true).describe("Strip ANSI escape codes from output."),
       timeout_ms: external_exports.number().int().min(1e3).max(6e5).default(12e4).describe("Kill the command after this many ms (default 120000, max 600000). Raise it for long builds/test suites.")
     },
     handler3
   );
+}
+
+// src/tools/script.js
+var import_fast_glob2 = __toESM(require_out4(), 1);
+import vm from "node:vm";
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
+import { exec as exec3 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+var execAsync3 = promisify3(exec3);
+var fmt = (v) => typeof v === "string" ? v : JSON.stringify(v, null, 1) ?? String(v);
+var DESC = `Code mode: run an async JS snippet that chains file/shell ops and returns only the final result \u2014
+intermediate data never enters context. Use when a task needs 3+ chained lookups (search \u2192 filter \u2192 read
+slices \u2192 edit). In scope (paths relative to project root):
+  read(path) \u2192 string            glob(pattern) \u2192 string[]       sh(cmd) \u2192 {stdout, stderr, code}
+  search(smart_search args) \u2192 text   edit([{file, oldContent, newContent}]) \u2192 text   run(cmd) \u2192 text
+  console.log(...)
+"return" what you need. Example:
+  const hits = []; for (const f of await glob("src/**/*.ts")) if ((await read(f)).includes("useAuth")) hits.push(f); return hits;`;
+function registerScript(server2, tools2) {
+  const call = async (name, args) => {
+    const t = tools2[name];
+    const res = await t.handler(t.inputSchema.parse(args ?? {}), {});
+    return res.content.map((c) => c.text ?? "").join("\n");
+  };
+  return server2.tool("brozi_script", DESC, {
+    code: external_exports.string().describe("Body of an async function. Use await; return the result."),
+    timeout_ms: external_exports.number().int().min(1e3).max(6e5).default(12e4).describe("Stop waiting after this many ms.")
+  }, async ({ code, timeout_ms }) => {
+    const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const abs = (p) => path3.resolve(root, p);
+    const logs = [];
+    const api = {
+      read: (p) => fs3.readFile(abs(p), "utf8"),
+      glob: (pattern, opts = {}) => (0, import_fast_glob2.default)(pattern, { cwd: root, dot: true, ignore: ["**/node_modules/**", "**/.git/**"], ...opts }),
+      sh: async (cmd, opts = {}) => {
+        try {
+          const { stdout, stderr } = await execAsync3(cmd, { cwd: root, maxBuffer: 32 * 1024 * 1024, timeout: opts.timeout ?? timeout_ms });
+          return { stdout, stderr, code: 0 };
+        } catch (e) {
+          return { stdout: e.stdout ?? "", stderr: e.stderr || e.message, code: e.code ?? 1 };
+        }
+      },
+      search: (args) => call("brozi_smart_search", args),
+      edit: (args) => call("brozi_batch_edit", Array.isArray(args) ? { edits: args } : args),
+      run: (args) => call("brozi_run", typeof args === "string" ? { command: args } : args),
+      console: { log: (...a) => logs.push(a.map(fmt).join(" ")) }
+    };
+    let timer;
+    try {
+      const ctx = vm.createContext(api);
+      const pending = vm.runInContext(`(async () => {
+${code}
+})()`, ctx, { timeout: 5e3 });
+      const value = await Promise.race([
+        pending,
+        new Promise((_, rej) => {
+          timer = setTimeout(() => rej(new Error(`timed out after ${timeout_ms}ms`)), timeout_ms);
+        })
+      ]);
+      const out = [logs.join("\n"), value === void 0 ? "" : fmt(value)].filter(Boolean).join("\n");
+      return { content: [{ type: "text", text: capChars(out || "(no return value)") }] };
+    } catch (e) {
+      const msg = `Error: ${e?.message ?? e}` + (logs.length ? `
+\u2500\u2500 console \u2500\u2500
+${logs.join("\n")}` : "");
+      return { content: [{ type: "text", text: capChars(msg) }], isError: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
 
 // src/index.js
@@ -42862,9 +42972,15 @@ var server = new McpServer({
   name: "brozicode",
   version: readVersion()
 });
-registerBatchEdit(server);
-registerSmartSearch(server);
-registerRun(server);
+var tools = {
+  brozi_batch_edit: registerBatchEdit(server),
+  brozi_smart_search: registerSmartSearch(server),
+  brozi_run: registerRun(server)
+};
+tools.brozi_script = registerScript(server, tools);
+for (const t of Object.values(tools)) {
+  t._meta = { ...t._meta || {}, "anthropic/alwaysLoad": true };
+}
 try {
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -14,6 +14,8 @@ Use brozi_smart_search for all file discovery and reading:
   to read only those lines (e.g. `"src/foo.ts#50-100"`).
 - `content_regex` — filter files by content (grep-style). Combine with `file_glob_patterns`
   to narrow by scope and content in one call.
+- `focus` — plain keywords (`"token refresh"`); returns only the matching regions with ±2
+  lines of context. Literal and case-insensitive — no regex escaping needed.
 - `output_mode`:
   - `"file_paths_with_content"` (default) — discover and read in one step
   - `"file_paths_only"` — just filenames with size/date

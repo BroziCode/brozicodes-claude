@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerBatchEdit } from './tools/batch-edit.js';
 import { registerSmartSearch } from './tools/smart-search.js';
 import { registerRun } from './tools/run.js';
+import { registerScript } from './tools/script.js';
 
 // ─── Global error handlers ────────────────────────────────────────────────────
 // Catch unhandled errors so the MCP server stays alive instead of crashing
@@ -42,9 +43,20 @@ const server = new McpServer({
   version: readVersion(),
 });
 
-registerBatchEdit(server);
-registerSmartSearch(server);
-registerRun(server);
+const tools = {
+  brozi_batch_edit:   registerBatchEdit(server),
+  brozi_smart_search: registerSmartSearch(server),
+  brozi_run:          registerRun(server),
+};
+tools.brozi_script = registerScript(server, tools);
+
+// Claude Code defers MCP tools behind tool search by default. For us that meant
+// every first use (and every redirect away from a native tool) cost an extra
+// ToolSearch round-trip before the real call. alwaysLoad keeps these four
+// schemas in the cached prompt prefix instead.
+for (const t of Object.values(tools)) {
+  t._meta = { ...(t._meta || {}), 'anthropic/alwaysLoad': true };
+}
 
 // If startup itself fails, exit loudly. The uncaughtException handler above keeps
 // the process alive on a bad TOOL CALL, which is what we want — but applied to a
